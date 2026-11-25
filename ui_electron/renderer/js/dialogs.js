@@ -3,7 +3,7 @@
 import { html, useEffect, useMemo, useRef, useState } from './lib.js';
 import { native, rpc, thumbUrl } from './api.js';
 import { getState, patch, setState, useStore } from './store.js';
-import { chooseDirectory, closeModal, openDirectory, setTab } from './state.js';
+import { chooseDirectory, closeModal, loadInquiryModel, openDirectory, setTab } from './state.js';
 import { Bar, Btn, Check, confirmDialog, Dot, Img, Modal, reportError, Seg, TextField, toast } from './ui.js';
 import { basename, debounce, fmtBytes, fmtDateTime, fmtInt, modelShort, plural, relPath, shortHash } from './util.js';
 
@@ -39,7 +39,7 @@ function InspectDialog({ path, list, multi }) {
 }
 
 function SingleInspect({ initialPath, list }) {
-  const { root, filters, llama } = useStore((s) => ({ root: s.dir.path, filters: s.filters, llama: s.inquiry.model }));
+  const { root, filters } = useStore((s) => ({ root: s.dir.path, filters: s.filters }));
   const [path, setPath] = useState(initialPath);
   const [data, setData] = useState(null);
   const [tab, setTabName] = useState(null);
@@ -147,7 +147,7 @@ function SingleInspect({ initialPath, list }) {
             : tab === 'results' ? html`<${ResultsTab} data=${data} model=${model} setModel=${setModel} />`
             : tab === 'diff' ? html`<${DiffTab} data=${data} current=${current} setModel=${setModel} filters=${filters} />`
             : tab === 'editor' ? html`<${EditorTab} data=${data} editor=${editor} setEditor=${setEditor} />`
-            : html`<${InquiryTab} path=${path} llama=${llama} />`}
+            : html`<${InquiryTab} path=${path} />`}
         </div>
       </div>
       <div class="modal-foot">
@@ -290,17 +290,72 @@ function EditorTab({ data, editor, setEditor }) {
   </div>`;
 }
 
-function InquiryTab({ path, llama }) {
-  const { single, tasks } = useStore((s) => ({ single: s.inquiry.single, tasks: s.inquiry.tasks }));
+function InquiryTab({ path }) {
+  const { model: llama, single, batch, tasks, loading, loadError } = useStore((s) => s.inquiry);
   const [info, setInfo] = useState(null);
   const [task, setTask] = useState('describe');
   const [prompt, setPrompt] = useState('');
+  const [savedModelPath, setSavedModelPath] = useState(null);
+  const [requesting, setRequesting] = useState(false);
+  const modelLabel = llama?.label;
+  const hasModel = Boolean(llama);
   const running = single.running && single.path === path;
-  const reload = () => rpc('inquiry.image', { path }).then(setInfo).catch((err) => setInfo({ error: err.message }));
-  useEffect(() => { reload(); }, [path, llama?.label, single.refresh]);
+
+  useEffect(() => {
+    if (hasModel) return;
+    let current = true;
+    setSavedModelPath(null);
+    rpc('inquiry.state').then(({ config }) => {
+      if (current) setSavedModelPath(typeof config.llama_model_path === 'string' ? config.llama_model_path.trim() : '');
+    }).catch((err) => {
+      if (!current) return;
+      setSavedModelPath('');
+      reportError(err, 'Could not check the saved model');
+    });
+    return () => { current = false; };
+  }, [hasModel]);
+
+  useEffect(() => {
+    if (!hasModel) return;
+    let current = true;
+    rpc('inquiry.image', { path }).then(({ history }) => {
+      if (current) setInfo({ path, modelLabel, history });
+    }).catch((err) => {
+      if (current) reportError(err, 'Could not load image inquiry history');
+    });
+    return () => { current = false; };
+  }, [path, hasModel, modelLabel, single.refresh]);
+
   if (!llama) {
-    return html`<div class="empty"><div class="big">No llama model loaded</div><div>Load a multimodal model on the Inquiry tab to ask about this image here.</div>
-      <${Btn} onClick=${() => { closeModal('inspect'); setTab('inquiry'); patch('inquiry', { panel: 'gguf' }); }}>Open Inquiry</${Btn}></div>`;
+    const starting = loading || requesting;
+    const loadSaved = async () => {
+      setRequesting(true);
+      patch('inquiry', { loadError: null });
+      try {
+        await loadInquiryModel();
+      } finally {
+        setRequesting(false);
+      }
+    };
+    const openInquiry = () => {
+      closeModal('inspect');
+      setTab('inquiry');
+      patch('inquiry', { panel: 'gguf' });
+    };
+    const status = starting ? 'Starting server…'
+      : savedModelPath === null ? 'Checking for a saved model…'
+      : savedModelPath ? `Saved model: ${basename(savedModelPath)}`
+      : 'Configure a multimodal model on the Inquiry tab.';
+    return html`<div class="empty">
+      <div class="big">No llama model loaded</div>
+      <div role="status" title=${savedModelPath || ''}>${status}</div>
+      ${loadError ? html`<div class="note warn" role="alert">${loadError.message}</div>` : null}
+      <div class="row gap8">
+        ${savedModelPath ? html`<${Btn} variant="primary" busy=${starting} disabled=${starting || single.running || batch.running}
+          onClick=${loadSaved}>Load Saved Model</${Btn}>` : null}
+        <${Btn} onClick=${openInquiry}>Open Inquiry</${Btn}>
+      </div>
+    </div>`;
   }
   const send = async () => {
     try {
@@ -310,7 +365,7 @@ function InquiryTab({ path, llama }) {
       reportError(err);
     }
   };
-  const turns = info?.history || [];
+  const turns = info && info.path === path && info.modelLabel === modelLabel ? info.history : [];
   return html`<div class="col grow" style=${{ minHeight: 0 }}>
     <div class="scroll grow col gap10" style=${{ padding: '14px 16px' }}>
       ${turns.length ? turns.map((t, i) => html`<div class="bubble-u"><div class="meta">turn ${i + 1} · ${t.task}</div><div class="txt">${t.prompt || t.summary}</div></div>
@@ -324,7 +379,7 @@ function InquiryTab({ path, llama }) {
       <div class="row gap6" style=${{ flexWrap: 'wrap', gap: '5px' }}>${tasks.map((t) => html`<button class=${`task ${task === t ? 'on' : ''} ${t === 'audit' ? 'audit' : ''}`} onClick=${() => setTask(t)}>${t}</button>`)}</div>
       <div class="row gap8">
         <div class="grow"><${TextField} value=${prompt} placeholder="Optional question or guidance…" onInput=${setPrompt} onEnter=${send} /></div>
-        <${Btn} variant="primary" busy=${running} disabled=${single.running || getState().inquiry.batch.running} onClick=${send}>Send</${Btn}>
+        <${Btn} variant="primary" busy=${running} disabled=${loading || single.running || batch.running} onClick=${send}>Send</${Btn}>
       </div>
     </div>
   </div>`;

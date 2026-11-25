@@ -3,7 +3,7 @@
 import { html, useEffect, useMemo, useRef, useState } from '../lib.js';
 import { native, rpc, thumbUrl } from '../api.js';
 import { getState, patch, useStore } from '../store.js';
-import { chooseDirectory, openInspect, openModal, setRecursive } from '../state.js';
+import { chooseDirectory, loadInquiryModel, openInspect, openModal, setRecursive } from '../state.js';
 import { Btn, Check, confirmDialog, Dot, Img, NumberField, reportError, Seg, TextField, toast, useInterval } from '../ui.js';
 import { basename, debounce, fmtBytes, fmtDuration, fmtInt, pct, plural, relPath, shortHash } from '../util.js';
 import { FiltersEditor } from './filters.js';
@@ -51,22 +51,8 @@ function setOptions(change) {
 }
 
 async function loadLlama() {
-  const { config } = getState().inquiry;
   saveConfigSoon.cancel?.();
-  try {
-    await rpc('inquiry.load', { config });
-  } catch (err) {
-    if (err.code === 'no_runtime') {
-      const ok = await confirmDialog({
-        title: 'Install llama.cpp runtime?',
-        message: `No llama.cpp runtime is installed.\n\nDetected accelerator: ${err.data?.accelerator || 'unknown'}.\n\nInstall one now? A matched release is downloaded when available; otherwise it is built from source, which can take several minutes.`,
-        confirmLabel: 'Choose install method…',
-      });
-      if (ok) openModal('provision', {});
-      return;
-    }
-    reportError(err);
-  }
+  await loadInquiryModel(getState().inquiry.config);
 }
 
 async function selectImage(path) {

@@ -1,13 +1,8 @@
-"""Tests for KV-cache sizing and the report-don't-assign metadata flow."""
+"""Tests for KV-cache sizing and context suggestions."""
 
-import os
 import sys
 import unittest
-from importlib.util import find_spec
 from pathlib import Path
-from unittest.mock import patch
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -130,88 +125,3 @@ class SuggestionTests(unittest.TestCase):
         )
         self.assertEqual(result.suggested_ctx, 16384)
         self.assertIsNone(result.memory_max)
-
-
-class MetadataReportingTests(unittest.TestCase):
-    """Reading metadata must report, never overwrite a tuned field."""
-
-    @classmethod
-    def setUpClass(cls):
-        if find_spec("PyQt6") is None:
-            raise unittest.SkipTest("The deprecated Qt viewer is not installed.")
-        from PyQt6.QtWidgets import QApplication
-
-        cls.app = QApplication.instance() or QApplication([])
-
-    def _widget(self, ctx_size=131072, max_tokens=2048):
-        from ui.dialogs import create_llama_config_widget
-
-        patcher = patch("ui.dialogs.read_gguf_metadata", return_value=_qwen_like())
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        return create_llama_config_widget(
-            {
-                "llama_model_path": "/models/fake.gguf",
-                "ctx_size": ctx_size,
-                "max_tokens": max_tokens,
-            }
-        )
-
-    def test_reading_metadata_changes_no_field(self):
-        _, refs = self._widget()
-        refs["read_metadata_btn"].click()
-
-        self.assertEqual(refs["ctx_size_spin"].value(), 131072)
-        self.assertEqual(refs["max_tokens_spin"].value(), 2048)
-
-    def test_report_states_the_cost_of_the_current_setting(self):
-        _, refs = self._widget()
-        refs["read_metadata_btn"].click()
-        text = refs["metadata_status_label"].text()
-
-        self.assertIn("262,144", text)      # trained context
-        self.assertIn("260.0 KiB/token", text)
-        self.assertIn("32.5 GiB", text)     # cost at the current 131,072
-        self.assertIn("16,384", text)       # the suggestion
-
-    def test_apply_button_sets_context_but_never_max_tokens(self):
-        _, refs = self._widget()
-        refs["read_metadata_btn"].click()
-        self.assertTrue(refs["apply_suggestion_btn"].isEnabled())
-
-        refs["apply_suggestion_btn"].click()
-
-        self.assertEqual(refs["ctx_size_spin"].value(), 16384)
-        # The regression this whole change exists to prevent: Max Tokens is a
-        # property of the task, and metadata must not touch it.
-        self.assertEqual(refs["max_tokens_spin"].value(), 2048)
-        self.assertFalse(refs["apply_suggestion_btn"].isEnabled())
-
-    def test_no_suggestion_offered_when_already_correct(self):
-        _, refs = self._widget(ctx_size=16384)
-        refs["read_metadata_btn"].click()
-
-        self.assertFalse(refs["apply_suggestion_btn"].isEnabled())
-        self.assertIn("already matches", refs["metadata_status_label"].text())
-
-    def test_changed_reply_budget_invalidates_suggestion(self):
-        _, refs = self._widget()
-        refs["read_metadata_btn"].click()
-        refs["max_tokens_spin"].setValue(32768)
-        self.assertFalse(refs["apply_suggestion_btn"].isEnabled())
-
-    def test_unreadable_model_reports_instead_of_raising(self):
-        from ui.dialogs import create_llama_config_widget
-
-        with patch("ui.dialogs.read_gguf_metadata", side_effect=OSError("bad file")):
-            _, refs = create_llama_config_widget(
-                {"llama_model_path": "/models/missing.gguf", "ctx_size": 8192}
-            )
-            refs["read_metadata_btn"].click()
-
-        self.assertIn("Could not read", refs["metadata_status_label"].text())
-        self.assertEqual(refs["ctx_size_spin"].value(), 8192)
-
-
-if __name__ == "__main__":
-    unittest.main()

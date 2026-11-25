@@ -1,7 +1,7 @@
 // Initial state, backend event wiring and shared actions.
 import { on, onConnection, rpc } from './api.js';
 import { getState, initState, patch, setState } from './store.js';
-import { reportError, toast } from './ui.js';
+import { confirmDialog, reportError, toast } from './ui.js';
 import { basename, fmtInt, plural } from './util.js';
 
 // Per-image queue state lives outside the store: thousands of rows update
@@ -59,6 +59,7 @@ export function initialState() {
     runtime: { summary: null, update: null, health: null, checkingUpdate: false, checkingHealth: false, provision: { running: false, step: null, logs: [], result: null } },
     gallery: { sort: 'name', show: 'all', tags: [], search: '', list: null, loading: false, selected: null, multi: false, multiSel: [], detail: null, meta: {}, version: 0 },
     settingsPage: 'hardware',
+    cacheCompile: null,
     settingsData: { db: null, queue: null, providers: null, cache: null },
     modals: { inspect: null, organize: null, firstRun: false, provision: null },
     busy: [],
@@ -132,6 +133,7 @@ export async function loadAppState() {
       loading: Boolean(snapshot.inquiry?.loading),
     },
     runtime: { ...s.runtime, summary: snapshot.runtime || null },
+    cacheCompile: snapshot.cache_compile || null,
     modals: {
       ...s.modals,
       firstRun: s.loaded ? s.modals.firstRun : !snapshot.settings?.first_run_done,
@@ -146,7 +148,6 @@ export async function loadAppState() {
 }
 
 async function promptQueue(queue) {
-  const { confirmDialog } = await import('./ui.js');
   const process = await confirmDialog({
     title: 'Queued database operations',
     message: `${plural(queue.pending_count, 'database write')} could not complete last time because the database was busy. Process them now?`,
@@ -160,6 +161,23 @@ async function promptQueue(queue) {
     } catch (err) {
       reportError(err);
     }
+  }
+}
+
+export async function loadInquiryModel(config) {
+  try {
+    await rpc('inquiry.load', config === undefined ? {} : { config });
+  } catch (err) {
+    if (err.code === 'no_runtime') {
+      const ok = await confirmDialog({
+        title: 'Install llama.cpp runtime?',
+        message: `No llama.cpp runtime is installed.\n\nDetected accelerator: ${err.data?.accelerator || 'unknown'}.\n\nInstall one now? A matched release is downloaded when available; otherwise it is built from source, which can take several minutes.`,
+        confirmLabel: 'Choose install method…',
+      });
+      if (ok) openModal('provision', {});
+      return;
+    }
+    reportError(err);
   }
 }
 
@@ -403,6 +421,13 @@ export function wireEvents() {
   on('organize.finished', (f) => {
     setState((s) => ({ modals: s.modals.organize ? { ...s.modals, organize: { ...s.modals.organize, progress: null, finished: f } } : s.modals }));
     toast(`Moved ${plural(f.moved, 'image')}${f.errors.length ? ` · ${f.errors.length} errors` : ''}`, f.errors.length ? 'warn' : 'ok', 7000);
+  });
+
+  on('cache.compile', (job) => {
+    setState({ cacheCompile: job });
+    if (job.state === 'finished' || job.state === 'cancelled') {
+      rpc('cache.models').then((cache) => patch('settingsData', { cache })).catch(reportError);
+    }
   });
 
   // Database busy (request/reply)

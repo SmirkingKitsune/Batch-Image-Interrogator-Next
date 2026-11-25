@@ -35,7 +35,7 @@ from core.pipelines import MultimodalBatchRunner, ReasoningRelay, StreamRelay, c
 from core.reasoning_controls import describe_reasoning_controls, reasoning_controls_from_metadata
 
 TASKS = ["describe", "ocr", "vqa", "custom", "audit"]
-# Largest prompt the sizing suggestion assumes; see ui/dialogs.py.
+# Largest prompt the sizing suggestion assumes.
 DEFAULT_WORKLOAD_PROMPT_TOKENS = 8192
 LLAMA_DEFAULTS: Dict[str, Any] = {
     "llama_runtime_mode": RUNTIME_MODE_MANAGED,
@@ -44,7 +44,7 @@ LLAMA_DEFAULTS: Dict[str, Any] = {
     "llama_mmproj_path": "",
     "ctx_size": 8192,
     "gpu_layers": -1,
-    # --no-repack keeps CPU-side weights memory-mapped; see ui/dialogs.py.
+    # --no-repack keeps CPU-side weights memory-mapped.
     "no_repack": False,
     "temperature": 0.0,
     "max_tokens": 8192,
@@ -85,9 +85,10 @@ class InquiryFeature:
     # ------------------------------------------------------------------
 
     def _llama_config(self) -> Dict[str, Any]:
-        config = dict(LLAMA_DEFAULTS)
-        config.update(self.inquiry_settings.get_llama_config())
-        config["llama_runtime_mode"] = runtime_mode(config)
+        saved = self.inquiry_settings.get_llama_config()
+        config = {**LLAMA_DEFAULTS, **saved}
+        # Infer legacy runtime mode before the default can mask a custom path.
+        config["llama_runtime_mode"] = runtime_mode(saved)
         for stale in ("include_prior_tables", "carry_batch_context", "included_model_types"):
             config.pop(stale, None)
         return config
@@ -112,7 +113,7 @@ class InquiryFeature:
 
     def rpc_inquiry_save(self, config: Optional[Dict[str, Any]] = None,
                          options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Persist Inquiry settings exactly where the PyQt6 tab keeps them."""
+        """Persist Inquiry settings in the existing settings file."""
         payload: Dict[str, Any] = dict(options or {})
         if config is not None:
             merged = self._llama_config()
@@ -286,7 +287,7 @@ class InquiryFeature:
         return {"repetition_guard": bool(enabled), "live": callable(setter)}
 
     def rpc_inquiry_metadata(self, model_path: str = "", ctx_size: int = 0, max_tokens: int = 0) -> Dict[str, Any]:
-        """GGUF sizing facts, as the PyQt6 'Read Metadata' button reports them."""
+        """Report GGUF sizing facts without changing settings."""
         config = self._llama_config()
         model_path = model_path or config.get("llama_model_path") or ""
         ctx = int(ctx_size or config.get("ctx_size") or 8192)

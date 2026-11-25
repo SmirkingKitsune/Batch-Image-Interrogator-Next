@@ -15,11 +15,6 @@ setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
 
-REM --qt installs the deprecated Qt viewer instead of Electron.
-set "INSTALL_QT=n"
-for %%a in (%*) do (
-    if "%%~a"=="--qt" set "INSTALL_QT=y"
-)
 echo.
 echo ============================================================
 echo IMAGE INTERROGATOR - SETUP WIZARD
@@ -310,14 +305,6 @@ if errorlevel 1 (
 )
 
 echo.
-if "!INSTALL_QT!"=="y" (
-    pip install -r requirements-qt.txt --upgrade
-    if errorlevel 1 (
-        echo [ERROR] Failed to install the Qt viewer.
-        pause
-        exit /b 1
-    )
-)
 echo       All Python dependencies installed successfully!
 echo.
 
@@ -333,13 +320,6 @@ echo ONNX Runtime:
 python -c "import onnxruntime as ort; print(f'  Version: {ort.__version__}'); providers = ort.get_available_providers(); print(f'  CUDA Provider: {\"Yes\" if \"CUDAExecutionProvider\" in providers else \"No\"}')"
 echo.
 echo Critical Dependencies:
-if "!INSTALL_QT!"=="y" (
-    python -c "from PyQt6 import QtWidgets; print('  PyQt6: Installed')"
-    if errorlevel 1 (
-        pause
-        exit /b 1
-    )
-)
 python -c "from clip_interrogator import Interrogator; print('  CLIP Interrogator: Installed')" 2>nul || echo   [ERROR] CLIP Interrogator: NOT INSTALLED
 python -c "import PIL; print('  Pillow: Installed')" 2>nul || echo   [ERROR] Pillow: NOT INSTALLED
 echo.
@@ -367,23 +347,17 @@ if "!INSTALL_CUDA!"=="y" (
     )
 )
 
-if "!INSTALL_QT!"=="n" (
-    call :install_electron
-    if errorlevel 1 (
-        pause
-        exit /b 1
-    )
+call :install_electron
+if errorlevel 1 (
+    pause
+    exit /b 1
 )
 
 echo ============================================================
 echo SETUP COMPLETE!
 echo ============================================================
 echo.
-if "!INSTALL_QT!"=="y" (
-    echo Launch the deprecated Qt viewer with: run.bat --qt
-) else (
-    echo You can now run the application with: run.bat
-)
+echo You can now run the application with: run.bat
 echo.
 pause
 endlocal

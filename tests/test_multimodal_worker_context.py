@@ -1,6 +1,5 @@
 """Unit tests for multimodal batch context-source filtering."""
 
-import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,13 +8,7 @@ from PIL import Image
 
 from core.database import InterrogationDatabase
 from core.hashing import hash_image_content
-
-MODULE_PATH = Path(__file__).resolve().parents[1] / "ui" / "workers.py"
-SPEC = importlib.util.spec_from_file_location("workers", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-SPEC.loader.exec_module(MODULE)
-MultimodalInterrogationWorker = MODULE.MultimodalInterrogationWorker
+from core.pipelines import MultimodalBatchRunner
 
 
 class FakeDatabase:
@@ -127,7 +120,7 @@ class FakeAuditInterrogator(FakeLlamaInterrogator):
         }
 
 
-class MultimodalWorkerContextTests(unittest.TestCase):
+class MultimodalBatchContextTests(unittest.TestCase):
     def _make_image(self, directory: Path) -> Path:
         image_path = directory / "image.png"
         Image.new("RGB", (8, 8), (20, 40, 60)).save(image_path)
@@ -138,7 +131,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
         Image.new("RGB", (8, 8), (20, 40, 60)).save(image_path)
         return image_path
 
-    def _run_worker(
+    def _run_batch(
         self,
         db,
         image_path,
@@ -153,7 +146,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
         overwrite_files=False,
         txt_output_mode=None,
     ):
-        worker = MultimodalInterrogationWorker(
+        worker = MultimodalBatchRunner(
             image_paths=[image_path],
             interrogator=interrogator,
             database=db,
@@ -176,7 +169,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
         db.save_interrogation(image_id, model_id, tags, None, ", ".join(tags))
 
     def test_prior_tables_disabled_returns_empty_context(self):
-        worker = MultimodalInterrogationWorker(
+        worker = MultimodalBatchRunner(
             image_paths=[],
             interrogator=FakeInterrogator(),
             database=FakeDatabase(),
@@ -186,11 +179,11 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             included_model_types=["WD"],
         )
 
-        self.assertEqual(worker._build_included_tables("hash123"), [])
+        self.assertEqual(worker.build_included_tables("hash123"), [])
 
     def test_prior_transcripts_are_scoped_to_worker_model(self):
         db = FakeDatabase()
-        worker = MultimodalInterrogationWorker(
+        worker = MultimodalBatchRunner(
             image_paths=[],
             interrogator=FakeInterrogator(),
             database=db,
@@ -199,7 +192,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             include_prior_transcripts=True,
         )
 
-        history = worker._build_included_transcripts("hash123")
+        history = worker.build_included_transcripts("hash123")
 
         self.assertEqual(
             db.history_calls,
@@ -208,21 +201,17 @@ class MultimodalWorkerContextTests(unittest.TestCase):
         self.assertEqual(history[0]["model_name"], "LlamaCpp")
 
     def test_cancel_before_run_reports_cancelled(self):
-        worker = MultimodalInterrogationWorker(
+        worker = MultimodalBatchRunner(
             image_paths=[],
             interrogator=FakeInterrogator(),
             database=FakeDatabase(),
             task="describe",
             prompt="",
         )
-        finished_states = []
-        worker.finished.connect(finished_states.append)
-
         worker.cancel()
-        worker.run()
 
+        self.assertTrue(worker.run())
         self.assertTrue(worker.was_cancelled)
-        self.assertEqual(finished_states, [True])
 
     def test_cancel_after_result_reports_cancelled_and_stops_remaining_images(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -231,7 +220,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             second_image = self._make_named_image(tmp, "second.png")
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
             interrogator = FakeLlamaInterrogator("cancel")
-            worker = MultimodalInterrogationWorker(
+            worker = MultimodalBatchRunner(
                 image_paths=[first_image, second_image],
                 interrogator=interrogator,
                 database=db,
@@ -240,14 +229,10 @@ class MultimodalWorkerContextTests(unittest.TestCase):
                 write_files=False,
                 use_cache=False,
             )
-            finished_states = []
-            worker.result.connect(lambda _path, _results: worker.cancel())
-            worker.finished.connect(finished_states.append)
+            worker.on_result = lambda _path, _results, _meta: worker.cancel()
 
-            worker.run()
-
+            self.assertTrue(worker.run())
             self.assertEqual(interrogator.calls, 1)
-            self.assertEqual(finished_states, [True])
             self.assertTrue(worker.was_cancelled)
 
     def test_exact_cache_hit_skips_interrogator(self):
@@ -257,11 +242,11 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
             first = FakeLlamaInterrogator("first")
-            self._run_worker(db, image_path, first, prompt="same")
+            self._run_batch(db, image_path, first, prompt="same")
             self.assertEqual(first.calls, 1)
 
             second = FakeLlamaInterrogator("second")
-            self._run_worker(db, image_path, second, prompt="same")
+            self._run_batch(db, image_path, second, prompt="same")
 
             self.assertEqual(second.calls, 0)
             cached = db.get_interrogation(hash_image_content(str(image_path)), second.model_name)
@@ -273,9 +258,9 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             image_path = self._make_image(tmp)
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
-            self._run_worker(db, image_path, FakeLlamaInterrogator("seed"), prompt="prompt A")
+            self._run_batch(db, image_path, FakeLlamaInterrogator("seed"), prompt="prompt A")
             second = FakeLlamaInterrogator("miss")
-            self._run_worker(db, image_path, second, prompt="prompt B")
+            self._run_batch(db, image_path, second, prompt="prompt B")
 
             self.assertEqual(second.calls, 1)
 
@@ -285,9 +270,9 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             image_path = self._make_image(tmp)
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
-            self._run_worker(db, image_path, FakeLlamaInterrogator("seed"), task="describe")
+            self._run_batch(db, image_path, FakeLlamaInterrogator("seed"), task="describe")
             second = FakeLlamaInterrogator("miss")
-            self._run_worker(db, image_path, second, task="ocr")
+            self._run_batch(db, image_path, second, task="ocr")
 
             self.assertEqual(second.calls, 1)
 
@@ -299,7 +284,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             self._save_prior_result(db, image_path, "WD14", "WD", ["wd_tag"])
             self._save_prior_result(db, image_path, "CLIP ViT", "CLIP", ["clip_tag"])
 
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 FakeLlamaInterrogator("seed"),
@@ -307,7 +292,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
                 included_sources=[{"model_name": "WD14", "model_type": "WD"}],
             )
             second = FakeLlamaInterrogator("miss")
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 second,
@@ -325,7 +310,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             self._save_prior_result(db, image_path, "WD14", "WD", ["wd_tag"])
 
             source = [{"model_name": "WD14", "model_type": "WD"}]
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 FakeLlamaInterrogator("seed"),
@@ -335,7 +320,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             self._save_prior_result(db, image_path, "WD14", "WD", ["changed_wd_tag"])
 
             second = FakeLlamaInterrogator("miss")
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 second,
@@ -351,9 +336,9 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             image_path = self._make_image(tmp)
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
-            self._run_worker(db, image_path, FakeLlamaInterrogator("seed"), prompt="same")
+            self._run_batch(db, image_path, FakeLlamaInterrogator("seed"), prompt="same")
             second = FakeLlamaInterrogator("live")
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 second,
@@ -371,7 +356,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             image_path.with_suffix(".txt").write_text("existing_tag", encoding="utf-8")
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 FakeLlamaInterrogator("new"),
@@ -392,7 +377,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             image_path.with_suffix(".txt").write_text("existing_tag", encoding="utf-8")
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 FakeLlamaInterrogator("new"),
@@ -414,7 +399,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             image_path.with_suffix(".txt").write_text("existing_tag", encoding="utf-8")
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 FakeLlamaInterrogator("new"),
@@ -428,7 +413,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             )
 
     def test_prior_tables_filter_by_selected_model_types(self):
-        worker = MultimodalInterrogationWorker(
+        worker = MultimodalBatchRunner(
             image_paths=[],
             interrogator=FakeInterrogator(),
             database=FakeDatabase(),
@@ -438,13 +423,13 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             included_model_types=["WD", "CLIP"],
         )
 
-        included = worker._build_included_tables("hash123")
+        included = worker.build_included_tables("hash123")
 
         self.assertEqual([row["model_name"] for row in included], ["WD14", "CLIP ViT"])
         self.assertEqual(included[0]["raw_output_summary"], "wd raw")
 
     def test_prior_tables_filter_by_selected_sources_and_allow_prior_inquiry(self):
-        worker = MultimodalInterrogationWorker(
+        worker = MultimodalBatchRunner(
             image_paths=[],
             interrogator=FakeInterrogator(),
             database=FakeDatabase(),
@@ -458,12 +443,12 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             ],
         )
 
-        included = worker._build_included_tables("hash123")
+        included = worker.build_included_tables("hash123")
 
         self.assertEqual([row["model_name"] for row in included], ["CLIP ViT", "LlamaCpp"])
 
     def test_empty_selected_sources_include_no_context(self):
-        worker = MultimodalInterrogationWorker(
+        worker = MultimodalBatchRunner(
             image_paths=[],
             interrogator=FakeInterrogator(),
             database=FakeDatabase(),
@@ -473,7 +458,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             included_sources=[],
         )
 
-        self.assertEqual(worker._build_included_tables("hash123"), [])
+        self.assertEqual(worker.build_included_tables("hash123"), [])
 
     def test_audit_deletes_erroneous_sidecar_tags(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -482,7 +467,7 @@ class MultimodalWorkerContextTests(unittest.TestCase):
             image_path.with_suffix(".txt").write_text("cat, dog, indoor", encoding="utf-8")
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
-            self._run_worker(
+            self._run_batch(
                 db,
                 image_path,
                 FakeAuditInterrogator("audit"),

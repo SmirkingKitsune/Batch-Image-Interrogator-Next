@@ -4,8 +4,8 @@ import { html, useEffect, useState } from '../lib.js';
 import { native, rpc } from '../api.js';
 import { patch, setState, useStore } from '../store.js';
 import { openModal } from '../state.js';
-import { Btn, Check, confirmDialog, Dot, Radio, reportError, toast } from '../ui.js';
-import { fmtBytes, fmtGB, fmtInt, fmtTime, plural } from '../util.js';
+import { Bar, Btn, Check, confirmDialog, Dot, Radio, reportError, toast } from '../ui.js';
+import { fmtBytes, fmtGB, fmtInt, fmtTime, pct, plural } from '../util.js';
 import { FiltersEditor } from './filters.js';
 import { checkHealth, openLogFolder, RuntimeCard, updateLevelColor } from './runtime.js';
 
@@ -253,27 +253,69 @@ function CacheSummary() {
 }
 
 function CachePage() {
-  const { cache, loadedModel } = useStore((s) => ({ cache: s.settingsData.cache, loadedModel: s.interrog.model?.label }));
+  const { cache, job, loadedModel, taggerBusy } = useStore((s) => ({
+    cache: s.settingsData.cache,
+    job: s.cacheCompile,
+    loadedModel: s.interrog.model?.label,
+    taggerBusy: s.interrog.loading || s.interrog.running,
+  }));
   const [busy, setBusy] = useState('');
-  const remove = async (model, tensorrt) => {
-    const ok = await confirmDialog({
-      title: `Delete ${model.name}?`,
-      message: `Delete the downloaded ${model.name} files${tensorrt && model.trt ? ' and its TensorRT engine' : ''} (${fmtBytes(model.size + (tensorrt ? model.trt_size : 0))})? The model downloads again the next time it is loaded.`,
-      confirmLabel: 'Delete', variant: 'destructive',
+  const [selected, setSelected] = useState(() => new Set());
+  if (!cache) return html`<div class="note">Scanning caches…</div>`;
+  const active = job?.state === 'running' || job?.state === 'cancelling';
+  const locked = Boolean(busy) || active || taggerBusy;
+  const cached = cache.models.filter((m) => m.cached || m.trt);
+  const onnx = cached.filter((m) => m.onnx_cached);
+  const selectedCached = cached.filter((m) => selected.has(m.id));
+  const selectedOnnx = onnx.filter((m) => selected.has(m.id));
+  const canCompile = cache.tensorrt_available && cache.engine_caching && !locked;
+  const progress = job ? job.compiled + job.cached + job.errors.length : 0;
+
+  const select = (id, checked) => {
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
     });
-    if (!ok) return;
-    setBusy(model.id);
+  };
+
+  const compile = async (models, all = false) => {
+    setBusy('compile');
     try {
-      const next = await rpc('cache.delete', { model_id: model.id, tensorrt });
-      setState((s) => ({ settingsData: { ...s.settingsData, cache: next } }));
-      toast(`Deleted ${model.name}.`, 'ok');
+      await rpc('cache.compile', all ? {} : { model_ids: models.map((m) => m.id) });
     } catch (err) {
       reportError(err);
     } finally {
       setBusy('');
     }
   };
-  if (!cache) return html`<div class="note">Scanning caches…</div>`;
+
+  const remove = async (models) => {
+    const name = models.length === 1 ? models[0].name : plural(models.length, 'cached model');
+    const size = models.reduce((total, m) => total + m.size + m.trt_size, 0);
+    const ok = await confirmDialog({
+      title: `Delete ${name}?`,
+      message: `Delete ${fmtBytes(size)} of cached model files and TensorRT engines? The app downloads model files again when it needs them.`,
+      confirmLabel: 'Delete', variant: 'destructive',
+    });
+    if (!ok) return;
+    setBusy('delete');
+    try {
+      const { results, ...next } = await rpc('cache.delete_many', { model_ids: models.map((m) => m.id), tensorrt: true });
+      patch('settingsData', { cache: next });
+      const deleted = models.filter((m) => (!m.cached || results[m.id].deleted) && (!m.trt || results[m.id].tensorrt_deleted));
+      setSelected((previous) => new Set([...previous].filter((id) => !deleted.some((m) => m.id === id))));
+      const failed = models.length - deleted.length;
+      toast(`Deleted ${plural(deleted.length, 'cache')}${failed ? ` · ${plural(failed, 'cache')} could not be fully deleted` : ''}.`, failed ? 'warn' : 'ok');
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const canDelete = (models) => !locked && models.length > 0 && !models.some((m) => m.id === loadedModel);
+
   return html`<div class="col gap12" style=${{ maxWidth: '980px' }}>
     <div class="card">
       <div class="statgrid">
@@ -283,12 +325,34 @@ function CachePage() {
         <div><b>${fmtInt(cache.models.filter((m) => m.cached).length)}</b><span>cached taggers</span></div>
       </div>
     </div>
+    <div class="card col gap10">
+      <div class="label">TensorRT precompilation</div>
+      ${!cache.tensorrt_available ? html`<div class="note">ONNX Runtime's TensorRT provider is unavailable.</div>`
+        : !cache.engine_caching ? html`<div class="note">TensorRT engine caching is disabled.</div>` : null}
+      <div class="row gap8" style=${{ flexWrap: 'wrap' }}>
+        <${Btn} variant="primary" disabled=${!canCompile || !selectedOnnx.length} onClick=${() => compile(selectedOnnx)}>Precompile selected</${Btn}>
+        <${Btn} disabled=${!canCompile || !onnx.length} onClick=${() => compile(onnx, true)}>Precompile all cached</${Btn}>
+        ${active ? html`<${Btn} disabled=${job.state === 'cancelling'} onClick=${() => rpc('cache.cancel_compile').catch(reportError)}>Cancel after current model</${Btn}>` : null}
+      </div>
+      ${job ? html`<div class="col gap6" role="status">
+        <${Bar} value=${pct(progress, job.total)} />
+        <div class="note">${progress} of ${job.total} processed · ${job.compiled} compiled · ${job.cached} already cached${job.errors.length ? ` · ${job.errors.length} failed` : ''}${job.state === 'cancelled' ? ' · cancelled' : ''}</div>
+        ${job.current ? html`<div class="note">${job.state === 'cancelling' ? 'Finishing' : 'Compiling'} ${job.current}</div>` : null}
+        ${job.errors.map((error) => html`<div class="note warn" key=${error.model_id}>${error.model_id}: ${error.message}</div>`)}
+      </div>` : null}
+    </div>
+    <div class="row gap8">
+      <${Btn} size="sm" disabled=${!canDelete(selectedCached)} onClick=${() => remove(selectedCached)}>Delete selected caches</${Btn}>
+      <${Btn} size="sm" disabled=${!canDelete(cached)} onClick=${() => remove(cached)}>Delete all cached</${Btn}>
+    </div>
     <div class="card" style=${{ padding: 0 }}>
-      ${cache.models.map((m) => html`<div class="row gap10" style=${{ padding: '10px 16px', borderBottom: '1px solid var(--line-soft)' }}>
+      ${cache.models.map((m) => html`<div class="row gap10" key=${m.id} style=${{ padding: '10px 16px', borderBottom: '1px solid var(--line-soft)' }}>
+        <input type="checkbox" aria-label=${`Select ${m.id}`} checked=${selected.has(m.id)} disabled=${locked || (!m.cached && !m.trt)}
+          onChange=${(e) => select(m.id, e.currentTarget.checked)} />
         <${Dot} kind=${m.cached ? 'ok' : ''} />
         <div class="grow"><div class="mono" style=${{ fontSize: '11px', color: m.cached ? 'var(--tx1)' : 'var(--tx5)' }}>${m.id}</div>
           <div class="note">${m.type} · ${m.cached ? fmtBytes(m.size) : 'not downloaded'}${m.trt ? ` · TensorRT engine ${fmtBytes(m.trt_size)}` : ''}${loadedModel === m.id ? ' · loaded' : ''}</div></div>
-        ${m.cached ? html`<${Btn} size="sm" busy=${busy === m.id} disabled=${Boolean(busy) || loadedModel === m.id} onClick=${() => remove(m, true)}>Delete</${Btn}>` : null}
+        ${m.cached || m.trt ? html`<${Btn} size="sm" disabled=${locked || loadedModel === m.id} onClick=${() => remove([m])}>Delete</${Btn}>` : null}
       </div>`)}
     </div>
     ${(cache.gguf || []).length ? html`<div class="card"><div class="label" style=${{ marginBottom: '8px' }}>Configured GGUF files</div>
@@ -382,7 +446,7 @@ function ApplicationPage() {
     </div>
     <div class="card col gap8">
       <div class="label">About</div>
-      <div class="help">Image Interrogator — batch image tagging with CLIP, WD and Camie taggers and llama.cpp multimodal inquiry. Electron is the default viewer. The deprecated Qt viewer shares its database and model settings.</div>
+      <div class="help">Image Interrogator — batch image tagging with CLIP, WD and Camie taggers and llama.cpp multimodal inquiry.</div>
     </div>
   </div>`;
 }

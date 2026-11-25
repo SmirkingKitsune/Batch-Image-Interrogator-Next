@@ -2,11 +2,15 @@
 
 import json
 import os
+import tempfile
 from enum import Enum
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
 from core.atomic_write import write_json_atomic
+from core.model_cache import has_tensorrt_engine, precompiled_engine_dir
+
+TENSORRT_PROVIDER = "TensorrtExecutionProvider"
 
 
 class ProviderPreference(Enum):
@@ -193,10 +197,11 @@ class ONNXProviderSettings:
         Returns:
             List of option dicts matching provider chain order
         """
-        chain = self.get_provider_chain(device)
-        options = []
+        return self._options_for_providers(self.get_provider_chain(device))
 
-        for provider in chain:
+    def _options_for_providers(self, providers: List[str]) -> List[Dict]:
+        options = []
+        for provider in providers:
             if provider == 'TensorrtExecutionProvider':
                 options.append(self.trt_options.copy())
             elif provider == 'CUDAExecutionProvider':
@@ -261,6 +266,14 @@ class ONNXProviderSettings:
 
         providers = self.get_provider_chain(device)
         provider_options = self.get_provider_options(device)
+        if TENSORRT_PROVIDER in providers:
+            options = provider_options[providers.index(TENSORRT_PROVIDER)]
+            if options.get("trt_engine_cache_enable"):
+                directory = precompiled_engine_dir(
+                    Path(options["trt_engine_cache_path"]).expanduser(), Path(model_path)
+                )
+                if directory is not None and has_tensorrt_engine(directory):
+                    options["trt_engine_cache_path"] = str(directory)
         sess_options = self.get_session_options()
 
         # Create session with providers and options
@@ -272,6 +285,65 @@ class ONNXProviderSettings:
         )
 
         return session
+
+    def precompile_tensorrt(self, model_path: Path, image_shape: Tuple[int, ...]) -> bool:
+        """Warm a cached tagger and publish the complete engine files.
+
+        Returns False when this snapshot already has a precompiled engine.
+        """
+        import numpy as np
+        import onnxruntime as ort
+
+        available = self.get_available_providers()
+        if TENSORRT_PROVIDER not in available:
+            raise RuntimeError("The ONNX Runtime TensorRT execution provider is unavailable.")
+        if not self.trt_options.get("trt_engine_cache_enable"):
+            raise RuntimeError("Enable TensorRT engine caching before precompiling models.")
+        destination = precompiled_engine_dir(
+            Path(self.trt_options["trt_engine_cache_path"]).expanduser(), model_path
+        )
+        if destination is None:
+            raise ValueError("The ONNX file is not in a model cache snapshot.")
+        if has_tensorrt_engine(destination):
+            return False
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        providers = [TENSORRT_PROVIDER]
+        if "CUDAExecutionProvider" in available:
+            providers.append("CUDAExecutionProvider")
+        providers.append("CPUExecutionProvider")
+
+        # Stage beside the destination so a failed or interrupted warmup cannot
+        # publish an incomplete engine or interfere with ordinary inference.
+        with tempfile.TemporaryDirectory(prefix=".compile-", dir=destination.parent) as staging:
+            engine_dir = Path(staging) / "engines"
+            engine_dir.mkdir()
+            options = self._options_for_providers(providers)
+            options[0]["trt_engine_cache_path"] = str(engine_dir)
+            session = ort.InferenceSession(
+                str(model_path), sess_options=self.get_session_options(),
+                providers=providers, provider_options=options,
+            )
+            if TENSORRT_PROVIDER not in session.get_providers():
+                raise RuntimeError("TensorRT could not initialize; ONNX Runtime fell back to another provider.")
+            session.disable_fallback()
+            inputs = session.get_inputs()
+            if len(inputs) != 1 or len(inputs[0].shape) != len(image_shape) or inputs[0].type != "tensor(float)":
+                raise ValueError("Expected one float32 image input for this tagger.")
+            shape = tuple(
+                dim if isinstance(dim, int) and dim > 0 else default
+                for dim, default in zip(inputs[0].shape, image_shape)
+            )
+            session.run(None, {inputs[0].name: np.zeros(shape, dtype=np.float32)})
+            del session
+            if not has_tensorrt_engine(engine_dir):
+                raise RuntimeError("TensorRT did not produce an engine for this model.")
+            try:
+                engine_dir.rename(destination)
+            except OSError:
+                if has_tensorrt_engine(destination):
+                    return False  # Another process published this snapshot first.
+                raise
+        return True
 
     def get_active_provider(self, session) -> str:
         """

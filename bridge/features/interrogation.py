@@ -32,7 +32,7 @@ from core.model_catalog import (
 )
 from core.pipelines import InterrogationBatchRunner
 
-# Discovered-tag table refresh cap, matching the PyQt6 tab's 250 ms debounce.
+# Limit discovered-tag updates to four per second.
 TAGS_PUBLISH_INTERVAL = 0.25
 TOP_DISCOVERED_TAGS = 100
 
@@ -135,15 +135,15 @@ class InterrogationFeature:
     # ------------------------------------------------------------------
 
     def rpc_interrogate_load(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        if self.model_loading:
-            raise RpcError("A model is already loading.", code="busy")
-        if self.interrogation_busy():
-            raise RpcError("Wait for the running batch to finish.", code="busy")
         model_type = config.get("type")
         if model_type not in ("CLIP", "WD", "Camie"):
             raise RpcError(f"Unknown model type: {model_type}")
-
-        self.model_loading = True
+        with self._lock:
+            if self.model_loading or self._cache_compile_active():
+                raise RpcError("Wait for model loading or TensorRT precompilation to finish.", code="busy")
+            if self.interrogation_busy():
+                raise RpcError("Wait for the running batch to finish.", code="busy")
+            self.model_loading = True
         self.bus.publish("interrogate.model", {"state": "loading", "type": model_type})
         self._spawn("model-load", lambda: self._load_model(dict(config)))
         return {"loading": True}
@@ -252,9 +252,6 @@ class InterrogationFeature:
         if not images:
             raise RpcError("No images to interrogate.", code="no_images")
 
-        self.ui_settings.set("txt_mode", txt_mode)
-        self._discovered = {}
-        self._tags_published_at = 0.0
         job = {
             "total": len(images),
             "paths": images,
@@ -269,7 +266,6 @@ class InterrogationFeature:
             "txt_mode": txt_mode,
             "model": dict(self.model_info or {}),
         }
-        self._job = job
         runner = InterrogationBatchRunner(
             [Path(p) for p in images],
             self.interrogator,
@@ -281,7 +277,14 @@ class InterrogationFeature:
             on_result=self._on_item_result,
             on_error=self._on_item_error,
         )
-        self._runner = runner
+        with self._lock:
+            if self._cache_compile_active() or self.interrogation_busy():
+                raise RpcError("Wait for the active tagger or TensorRT job to finish.", code="busy")
+            self.ui_settings.set("txt_mode", txt_mode)
+            self._discovered = {}
+            self._tags_published_at = 0.0
+            self._job = job
+            self._runner = runner
         self.bus.publish("interrogate.started", {"total": len(images), "paths": images, "txt_mode": txt_mode})
         self.bus.publish("activity", {"interrogating": True})
         self._spawn("interrogate", lambda: self._run_batch(runner))
@@ -412,7 +415,7 @@ class InterrogationFeature:
     # -- aggregation -----------------------------------------------------
 
     def _accumulate_tags(self, results: Dict[str, Any]) -> None:
-        """Same accumulation as the PyQt6 tab: max confidence, count, category."""
+        """Accumulate maximum confidence, count and category by tag."""
         tags = results.get("tags", []) or []
         confidence_scores = results.get("confidence_scores") or {}
         categories: Dict[str, str] = {}

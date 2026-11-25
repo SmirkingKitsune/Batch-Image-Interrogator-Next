@@ -23,14 +23,6 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# --qt installs the deprecated Qt viewer instead of Electron.
-INSTALL_QT=n
-for arg in "$@"; do
-    if [ "$arg" = "--qt" ]; then
-        INSTALL_QT=y
-    fi
-done
-
 install_electron_ui() {
     echo "============================================================"
     echo "ELECTRON UI"
@@ -496,9 +488,6 @@ if [ $? -ne 0 ]; then
 fi
 
 echo ""
-if [ "$INSTALL_QT" = "y" ]; then
-    pip install -r requirements-qt.txt --upgrade
-fi
 echo -e "${GREEN}      All Python dependencies installed successfully!${NC}"
 echo ""
 
@@ -530,9 +519,6 @@ print(f'  TensorRT Provider: {"Yes" if "TensorrtExecutionProvider" in providers 
 EOF
 echo ""
 echo "Critical Dependencies:"
-if [ "$INSTALL_QT" = "y" ]; then
-    python3 -c "from PyQt6 import QtWidgets; print('  PyQt6: Installed')"
-fi
 python3 -c "from clip_interrogator import Interrogator; print('  CLIP Interrogator: Installed')" 2>/dev/null || echo -e "${RED}  [ERROR] CLIP Interrogator: NOT INSTALLED${NC}"
 python3 -c "import PIL; print('  Pillow: Installed')" 2>/dev/null || echo -e "${RED}  [ERROR] Pillow: NOT INSTALLED${NC}"
 echo ""
@@ -603,17 +589,11 @@ elif [ "$INSTALL_CUDA" = "y" ]; then
     fi
 fi
 
-if [ "$INSTALL_QT" = "n" ]; then
-    install_electron_ui
-fi
+install_electron_ui
 
 echo "============================================================"
 echo "SETUP COMPLETE!"
 echo "============================================================"
 echo ""
-if [ "$INSTALL_QT" = "y" ]; then
-    echo "Launch the deprecated Qt viewer with: ./run.sh --qt"
-else
-    echo "You can now run the application with: ./run.sh"
-fi
+echo "You can now run the application with: ./run.sh"
 echo ""

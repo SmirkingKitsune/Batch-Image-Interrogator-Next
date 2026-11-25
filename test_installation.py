@@ -131,17 +131,8 @@ def test_gpu_availability():
         print("  ○ ONNX Runtime not installed")
 
 
-def check_viewer(use_qt):
+def check_viewer():
     print("\nChecking viewer...")
-    if use_qt:
-        try:
-            from ui import MainWindow
-        except ImportError as exc:
-            print(f"  ✗ Qt viewer: {exc}")
-            return False
-        print("  ✓ Deprecated Qt viewer")
-        return True
-
     from bridge.electron import NOT_INSTALLED_MESSAGE, electron_binary
     if electron_binary() is None:
         print(NOT_INSTALLED_MESSAGE)
@@ -162,8 +153,7 @@ def main():
     results.append(("Module Imports", test_imports()))
     results.append(("Dependencies", test_dependencies()))
     results.append(("Database", test_database()))
-    use_qt = "--qt" in sys.argv[1:]
-    results.append(("Viewer", check_viewer(use_qt)))
+    results.append(("Viewer", check_viewer()))
     
     # GPU check (informational)
     test_gpu_availability()
@@ -182,8 +172,7 @@ def main():
     print("\n" + "=" * 60)
     if all_passed:
         print("All tests passed! Installation is complete.")
-        launch_args = " --qt" if use_qt else ""
-        print(f"\nYou can now run: python main.py{launch_args}")
+        print("\nYou can now run: python main.py")
     else:
         print("Some tests failed. Check the messages above and rerun setup.")
     print("=" * 60)

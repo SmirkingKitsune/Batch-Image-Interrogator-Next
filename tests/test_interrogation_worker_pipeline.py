@@ -1,4 +1,4 @@
-"""Regression tests for classic interrogation worker cache and txt output behavior."""
+"""Regression tests for classic interrogation cache and txt output behavior."""
 
 import json
 import math
@@ -6,7 +6,6 @@ import sqlite3
 import tempfile
 import unittest
 import sys
-from importlib.util import find_spec
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -22,13 +21,6 @@ from interrogators.camie_interrogator import CamieInterrogator
 from interrogators.clip_interrogator import CLIPInterrogator
 from interrogators.wd_interrogator import WDInterrogator
 
-
-def _qt_worker(*args, **kwargs):
-    if find_spec("PyQt6") is None:
-        raise unittest.SkipTest("The deprecated Qt viewer is not installed.")
-    from ui.workers import InterrogationWorker
-
-    return InterrogationWorker(*args, **kwargs)
 
 
 class FixedScoreSession:
@@ -147,7 +139,7 @@ class FakeTagger(BaseInterrogator):
         return {"threshold": 0.35}
 
 
-class InterrogationWorkerPipelineTests(unittest.TestCase):
+class InterrogationPipelineTests(unittest.TestCase):
     def _make_image(self, directory: Path) -> Path:
         image_path = directory / "image.png"
         Image.new("RGB", (8, 8), (20, 40, 60)).save(image_path)
@@ -165,8 +157,7 @@ class InterrogationWorkerPipelineTests(unittest.TestCase):
             db.save_interrogation(image_id, model_id, [], {}, "")
 
             interrogator = make_wd(0.35, {"fresh_tag": 0.9})
-            worker = _qt_worker([image_path], interrogator, db, write_files=False)
-            worker.run()
+            self._run(image_path, db, interrogator)
 
             self.assertEqual(interrogator.model.calls, 1)
             cached = db.get_interrogation(image_hash, "FakeWD")
@@ -185,8 +176,7 @@ class InterrogationWorkerPipelineTests(unittest.TestCase):
             db.save_interrogation(image_id, model_id, ["stale_tag"], {"stale_tag": 0.4}, "stale_tag")
 
             interrogator = make_wd(0.35, {"fresh_tag": 0.9})
-            worker = _qt_worker([image_path], interrogator, db, write_files=False)
-            worker.run()
+            self._run(image_path, db, interrogator)
 
             self.assertEqual(interrogator.model.calls, 1)
             cached = db.get_interrogation(image_hash, "FakeWD")
@@ -378,15 +368,11 @@ class InterrogationWorkerPipelineTests(unittest.TestCase):
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
             interrogator = FakeTagger("FakeWD", "WD", ["fresh_tag"])
-            _qt_worker([image_path], interrogator, db, write_files=False).run()
-
-            cached_flags = []
-            worker = _qt_worker([image_path], interrogator, db, write_files=False)
-            worker._runner.on_result = lambda _path, _results, meta: cached_flags.append(meta["cached"])
-            worker.run()
+            self._run(image_path, db, interrogator)
+            _, served_from_cache = self._run(image_path, db, interrogator)
 
             self.assertEqual(interrogator.calls, 1)
-            self.assertEqual(cached_flags, [True])
+            self.assertTrue(served_from_cache)
             cached = db.get_interrogation(hash_image_content(str(image_path)), "FakeWD")
             self.assertEqual(cached["result_version"], WDInterrogator.RESULT_VERSION)
 
@@ -398,14 +384,13 @@ class InterrogationWorkerPipelineTests(unittest.TestCase):
 
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
             interrogator = FakeTagger("FakeCamie", "Camie", ["new_tag"])
-            worker = _qt_worker(
+            InterrogationBatchRunner(
                 [image_path],
                 interrogator,
                 db,
                 write_files=True,
                 overwrite_files=False,
-            )
-            worker.run()
+            ).run()
 
             self.assertEqual(
                 image_path.with_suffix(".txt").read_text(encoding="utf-8"),

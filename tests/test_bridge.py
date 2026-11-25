@@ -13,7 +13,7 @@ import time
 import unittest
 import warnings
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -465,6 +465,89 @@ class BridgeServiceTests(unittest.TestCase):
         self.assertTrue((self.images_dir / "organized" / "a.txt").exists())
         self.assertTrue((self.images_dir / "sub" / "organized" / "c.png").exists())
 
+    def _seed_onnx_cache(self, models):
+        from core import model_cache
+
+        root = self.tmp / "hub"
+        cache_patch = patch.object(model_cache, "HF_CACHE_DIR", root)
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
+        options = self.service.provider_settings.trt_options
+        options["trt_engine_cache_path"] = str(self.tmp / "engines")
+        for model_id, filename in models:
+            repo = root / ("models--" + model_id.replace("/", "--"))
+            snapshot = repo / "snapshots" / "revision"
+            snapshot.mkdir(parents=True)
+            (snapshot / filename).touch()
+        return root
+
+    def test_cache_compile_selected_and_all_cached_onnx_models(self):
+        from core.model_cache import ModelCacheManager
+
+        wd = ModelCacheManager.WD_MODELS[0]
+        camie = "Camais03/camie-tagger-v2"
+        metadata_only = ModelCacheManager.WD_MODELS[1]
+        root = self._seed_onnx_cache([
+            (wd, "model.onnx"), (camie, "camie-tagger-v2.onnx"), (metadata_only, "selected_tags.csv"),
+        ])
+        bridge = self.service
+        with patch.object(bridge.provider_settings, "is_tensorrt_available", return_value=True),                 patch.object(bridge.provider_settings, "precompile_tensorrt", return_value=True) as compile_model:
+            cache = {model["id"]: model for model in bridge.dispatch("cache.models", {})["models"]}
+            self.assertTrue(cache[wd]["onnx_cached"])
+            self.assertFalse(cache[metadata_only]["onnx_cached"])
+            with self.assertRaises(RpcError) as missing:
+                bridge.dispatch("cache.compile", {"model_ids": [metadata_only]})
+            self.assertEqual(missing.exception.code, "no_cached_onnx")
+
+            bridge.dispatch("cache.compile", {"model_ids": [wd, wd]})
+            finished = self.wait_for("cache.compile")
+            while finished["state"] != "finished":
+                finished = self.wait_for("cache.compile")
+            self.assertEqual((finished["total"], finished["compiled"]), (1, 1))
+            self.assertEqual(compile_model.call_args.args[1], (1, 448, 448, 3))
+            self.assertTrue(compile_model.call_args.args[0].is_relative_to(root))
+
+            compile_model.reset_mock()
+            compile_model.side_effect = [RuntimeError("fixture failure"), True]
+            bridge.dispatch("cache.compile", {})
+            finished = self.wait_for("cache.compile")
+            while finished["state"] != "finished":
+                finished = self.wait_for("cache.compile")
+            self.assertEqual((finished["total"], finished["compiled"]), (2, 1))
+            self.assertEqual(finished["errors"], [{"model_id": wd, "message": "fixture failure"}])
+            self.assertEqual([c.args[1] for c in compile_model.call_args_list], [(1, 448, 448, 3), (1, 3, 512, 512)])
+            self.assertEqual(bridge.cache_compile_state(), finished)
+
+    def test_cache_compile_cancels_after_current_model(self):
+        from core.model_cache import ModelCacheManager
+
+        models = ModelCacheManager.WD_MODELS[:2]
+        self._seed_onnx_cache([(model, "model.onnx") for model in models])
+        bridge = self.service
+        release = threading.Event()
+        def compile_model(*_args):
+            self.assertTrue(release.wait(5))
+            return True
+
+        with patch.object(bridge.provider_settings, "is_tensorrt_available", return_value=True),                 patch.object(bridge.provider_settings, "precompile_tensorrt", side_effect=compile_model) as compile_mock:
+            bridge.dispatch("cache.compile", {})
+            try:
+                initial = self.wait_for("cache.compile")
+                self.assertEqual(initial["state"], "running")
+                current = self.wait_for("cache.compile")
+                self.assertEqual(current["current"], models[0])
+                with self.assertRaises(RpcError) as busy:
+                    bridge.dispatch("cache.delete_many", {"model_ids": models})
+                self.assertEqual(busy.exception.code, "busy")
+                self.assertTrue(bridge.dispatch("cache.cancel_compile", {})["cancelling"])
+            finally:
+                release.set()
+            finished = self.wait_for("cache.compile")
+            while finished["state"] != "cancelled":
+                finished = self.wait_for("cache.compile")
+            self.assertEqual(finished["compiled"], 1)
+            compile_mock.assert_called_once()
+
     def test_filters_are_edited_and_broadcast(self):
         state = self.service.dispatch("filters.add", {"kind": "replace", "tag": "girl", "replacement": "female"})
         self.assertEqual(state["replace"], {"girl": "female"})
@@ -506,6 +589,42 @@ class BridgeServiceTests(unittest.TestCase):
         self.service.llama = llama
         self.service.llama_info = {"file": "fake.gguf", "reasoning": llama.reasoning_controls, "reasoning_effort": None}
         return llama
+
+    def test_load_inquiry_without_config_uses_the_persisted_model(self):
+        binary = self.tmp / "llama-server.exe"
+        model = self.tmp / "vision.gguf"
+        projector = self.tmp / "mmproj.gguf"
+        for path in (binary, model, projector):
+            path.touch()
+        settings = self.service.inquiry_settings
+        settings.update_llama_config({
+            "llama_binary_path": str(binary),
+            "llama_model_path": str(model),
+            "llama_mmproj_path": str(projector),
+            "ctx_size": 4096,
+            "gpu_layers": 12,
+        })
+        # Reload so the request exercises settings written by a previous session.
+        self.service.inquiry_settings = InquirySettings(str(settings.settings_file))
+        llama = FakeLlama()
+        llama.load_model = Mock()
+        llama.runtime = Mock()
+        llama.runtime.get_runtime_metadata.return_value = {}
+
+        with patch("interrogators.LlamaCppInterrogator", return_value=llama):
+            self.assertEqual(self.service.dispatch("inquiry.load", {}), {"loading": True})
+            self.assertEqual(self.wait_for("inquiry.model")["state"], "loading")
+            loaded = self.wait_for("inquiry.model")
+
+        self.assertEqual((loaded["state"], loaded["file"]), ("loaded", model.name))
+        self.assertEqual(self.service.dispatch("inquiry.state", {})["model"]["file"], model.name)
+        llama.load_model.assert_called_once()
+        kwargs = llama.load_model.call_args.kwargs
+        self.assertEqual(kwargs["llama_binary_path"], str(binary))
+        self.assertEqual(kwargs["llama_model_path"], str(model))
+        self.assertEqual(kwargs["llama_mmproj_path"], str(projector))
+        self.assertEqual(kwargs["ctx_size"], 4096)
+        self.assertEqual(kwargs["gpu_layers"], 12)
 
     def test_single_inquiry_streams_thinking_before_the_answer(self):
         self.open_directory()
@@ -572,7 +691,7 @@ class BridgeServiceTests(unittest.TestCase):
         self.assertTrue(result["disable_reasoning"])
         self.assertEqual(result["reasoning_effort"], "high", "switching thinking off keeps the chosen effort")
 
-        # The PyQt6 tab shares the settings file; it gains the key, loses nothing.
+        # Saving the new setting preserves the rest of the file.
         saved = self.service.inquiry_settings.get_llama_config()
         self.assertEqual((saved["reasoning_effort"], saved["disable_reasoning"]), ("high", True))
 
@@ -699,24 +818,13 @@ class LaunchTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_qt_flag_reports_missing_optional_dependency(self):
-        script = (
-            "import sys\n"
-            "sys.argv = ['main.py', '--qt']\n"
-            "sys.modules['PyQt6'] = None\n"
-            "import core.device_detector as dd\n"
-            "dd.detect_devices_early = lambda: {'pytorch_cuda_available': False, 'pytorch_error': None,"
-            " 'onnx_cuda_available': False, 'onnx_error': None}\n"
-            "import main\n"
-            "main.main()\n"
-        )
+    def test_removed_qt_flag_exits_with_a_migration_hint(self):
         result = subprocess.run(
-            [sys.executable, "-c", script],
+            [sys.executable, "main.py", "--qt"],
             cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=120,
         )
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("The Qt viewer is deprecated", result.stderr)
-        self.assertIn("./setup.sh --qt", result.stderr)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("Launch without --qt to open Electron", result.stderr)
 
     def test_token_travels_by_environment_not_argv(self):
         from bridge import electron

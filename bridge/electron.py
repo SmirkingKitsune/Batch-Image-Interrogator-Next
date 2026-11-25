@@ -19,8 +19,7 @@ ELECTRON_APP_DIR = PROJECT_ROOT / "ui_electron"
 ELECTRON_PACKAGE_DIR = ELECTRON_APP_DIR / "node_modules" / "electron"
 NOT_INSTALLED_MESSAGE = (
     "[X] Electron is not installed.\n"
-    "    Run setup.bat on Windows or ./setup.sh on Linux/macOS.\n"
-    "    If you installed the deprecated Qt viewer, launch it with --qt."
+    "    Run setup.bat on Windows or ./setup.sh on Linux/macOS."
 )
 
 

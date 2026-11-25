@@ -16,8 +16,10 @@ sys.path.insert(0, str(project_root))
 
 def main():
     """Main application entry point."""
-    # CRITICAL: Detect devices BEFORE Qt initialization
-    # This allows PyTorch to claim CUDA before Qt touches GPU resources
+    args = sys.argv[1:]
+    if "--qt" in args:
+        print("The Qt viewer has been removed. Launch without --qt to open Electron.", file=sys.stderr)
+        sys.exit(2)
     print("Detecting compute devices...")
     from core.device_detector import detect_devices_early
     device_status = detect_devices_early()
@@ -39,41 +41,8 @@ def main():
 
     print()  # Blank line for readability
 
-    args = sys.argv[1:]
-    if "--qt" not in args:
-        from bridge import start_bridge
-        sys.exit(start_bridge(device_status, args))
-
-    print("[WARN] The Qt viewer is deprecated. Electron is the default.", file=sys.stderr)
-    # PyTorch has already claimed CUDA by the time the legacy UI imports Qt.
-    try:
-        from PyQt6.QtCore import Qt, QTimer
-        from PyQt6.QtWidgets import QApplication
-    except ImportError:
-        print("[X] Qt is not installed. Run setup.bat --qt or ./setup.sh --qt.", file=sys.stderr)
-        sys.exit(1)
-    from ui import MainWindow
-
-    # Enable high DPI scaling
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
-
-    # Create application
-    app = QApplication([sys.argv[0], *(arg for arg in args if arg != "--qt")])
-    app.setApplicationName("Image Interrogator")
-    app.setOrganizationName("ImageInterrogator")
-
-    # Create main window (pass device status for config defaults)
-    window = MainWindow(device_status=device_status)
-    window.show()
-
-    # Defer model list population until event loop starts
-    # This ensures window is fully rendered before heavy operations
-    QTimer.singleShot(100, window.populate_model_lists)
-
-    # Run event loop
-    sys.exit(app.exec())
+    from bridge import start_bridge
+    sys.exit(start_bridge(device_status, args))
 
 
 if __name__ == '__main__':

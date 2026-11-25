@@ -33,11 +33,6 @@ image_interrogator/
 │   └── wd_interrogator.py   # Waifu Diffusion Tagger
 ├── bridge/                   # Local Python backend for Electron
 ├── ui_electron/              # Electron viewer
-├── ui/                       # Deprecated Qt viewer
-│   ├── main_window.py       # Main application window
-│   ├── widgets.py           # Custom widgets
-│   ├── dialogs.py           # Configuration dialogs
-│   └── workers.py           # Background worker threads
 ├── main.py                  # Application entry point
 └── requirements.txt         # Dependencies
 ```
@@ -221,11 +216,11 @@ python main.py
 
 ### Electron viewer
 
-Electron opens by default from the run scripts or `python main.py`. The old
-`--electron` flag still works in scripts. Electron and the deprecated Qt viewer
-share the same database, tag filters, ONNX provider settings and Inquiry settings.
+The run scripts and `python main.py` open Electron. The `--electron` flag
+remains accepted by existing scripts. Settings and databases from earlier
+versions keep their current paths and formats.
 
-The launcher detects compute devices first, then starts a Qt-free Python bridge.
+The launcher detects compute devices first, then starts the Python bridge.
 The bridge serves the window on `127.0.0.1` with a per-launch token, streams
 progress and results, and stops when the window closes.
 
@@ -245,16 +240,18 @@ sudo chmod 4755 ui_electron/node_modules/electron/dist/chrome-sandbox
 
 For development, `python main.py --bridge-only --bridge-port 51734` serves the UI without launching Electron and prints a one-time URL to open it in a browser.
 
-### Deprecated Qt viewer
+To start an inquiry from Advanced Image Inspection, open **Multimodal Inquiry**
+and choose **Load Saved Model**. The viewer uses the runtime, model, and inference
+settings you saved in the Inquiry tab. Use **Open Inquiry** to configure a model
+if you haven't saved one yet.
 
-Qt remains available for existing workflows that rely on loading a saved
-multimodal model directly from Advanced Image Inspection. In Electron, load the
-model from the Inquiry tab before using it in Advanced Image Inspection.
+### Precompile TensorRT engines
 
-- **Windows** — Install with `setup.bat --qt`, then launch with `run.bat --qt`.
-- **Linux/macOS** — Install with `./setup.sh --qt`, then launch with `./run.sh --qt`.
-- **Existing Python environment** — Install with `python -m pip install -r requirements-qt.txt`,
-  then launch with `python main.py --qt`.
+In **Settings → Model cache**, select downloaded WD or Camie models and choose
+**Precompile selected**, or choose **Precompile all cached**. The job processes
+models in the background and reports failures by model. **Cancel after current
+model** keeps completed engines. Use the TensorRT provider for interrogation to
+reuse the compiled engines.
 
 ### Basic Workflow
 
@@ -1025,11 +1022,10 @@ FileManager.write_tags_to_file(Path("path/to/image.jpg"), results['tags'])
 - **CLIP Interrogator**: Uses the clip-interrogator library
 - **Waifu Diffusion Tagger**: Uses SmilingWolf's WD Tagger models
 - **Camie Tagger**: Uses Camais03's Camie Tagger models
-- **UI Framework**: Electron (PyQt6 for the deprecated viewer)
+- **UI Framework**: Electron
 
 ## Support
 
 For issues or questions regarding upstream modules, refer to the documentation of the underlying libraries:
 - [CLIP Interrogator](https://github.com/pharmapsychotic/clip-interrogator)
 - [WD Tagger Models](https://huggingface.co/SmilingWolf)
-- [PyQt6 Documentation](https://www.riverbankcomputing.com/static/Docs/PyQt6/)

@@ -160,6 +160,7 @@ class BridgeService(
             "runtime": self.rpc_runtime_summary(),
             "filters": self.rpc_filters_get(),
             "queue": self.database.get_queue_status(),
+            "cache_compile": self.cache_compile_state(),
             "cwd": str(Path.cwd()),
         }
 
@@ -310,7 +311,7 @@ class BridgeService(
     # ------------------------------------------------------------------
 
     def shutdown(self) -> None:
-        """Stop background work and release models, as MainWindow.closeEvent does."""
+        """Stop background work and release models."""
         self._stopping.set()
         if self._runner is not None:
             self._runner.cancel()

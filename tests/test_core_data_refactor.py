@@ -253,20 +253,6 @@ class TestFileOrganization:
         assert (target / "image_1.txt").read_text(encoding="utf-8") == "cat, indoor"
         assert (target / "image.txt").read_text(encoding="utf-8") == "existing"
 
-    def test_worker_emits_actual_collision_adjusted_destination(self, tmp_path):
-        pytest.importorskip("PyQt6")
-        from ui.workers import OrganizationWorker
-
-        image = self._image_with_tags(tmp_path)
-        target = tmp_path / "organized"
-        target.mkdir()
-        (target / "image.png").write_bytes(b"existing")
-        emitted = []
-        worker = OrganizationWorker([image], ["cat"], "organized")
-        worker.moved.connect(lambda source, destination: emitted.append((source, destination)))
-        worker.run()
-        assert emitted == [(str(image), str(target / "image_1.png"))]
-
     def test_read_error_prevents_destructive_operations(self, tmp_path):
         image = self._image_with_tags(tmp_path)
         with mock.patch.object(

@@ -1,2 +1,0 @@
-# Optional dependency for the deprecated Qt viewer.
-PyQt6>=6.6.0

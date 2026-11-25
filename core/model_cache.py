@@ -1,16 +1,39 @@
 """Model cache management for HuggingFace and TensorRT cached models."""
 
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from huggingface_hub.constants import HF_HUB_CACHE
+
+from core.model_catalog import CAMIE_MODELS, WD_MODELS
+
 
 # Cache directory paths
-HF_CACHE_DIR = Path.home() / ".cache" / "huggingface" / "hub"
+HF_CACHE_DIR = Path(HF_HUB_CACHE)
 TRT_CACHE_DIR = Path.home() / ".cache" / "tensorrt_engines"
 TORCH_CACHE_DIR = Path.home() / ".cache" / "torch" / "hub"
+
+
+def precompiled_engine_dir(cache_dir: Path, onnx_path: Path) -> Optional[Path]:
+    """Locate a model revision's engine directory without resolving Hub symlinks."""
+    if len(onnx_path.parents) < 3 or onnx_path.parents[1].name != "snapshots":
+        return None
+    repo = onnx_path.parents[2].name
+    if not repo.startswith("models--"):
+        return None
+    return cache_dir / "compiled" / repo / onnx_path.parent.name
+
+
+def has_tensorrt_engine(directory: Path) -> bool:
+    for engine in directory.glob("*.engine"):
+        try:
+            if engine.is_file() and engine.stat().st_size > 0:
+                return True
+        except FileNotFoundError:
+            continue  # A cache deletion may have run since globbing.
+    return False
 
 
 @dataclass
@@ -28,37 +51,13 @@ class ModelCacheInfo:
 
 
 class ModelCacheManager:
-    """Manages model cache detection, deletion, and TensorRT conversion."""
+    """Find and remove model files and TensorRT engines in the local caches."""
 
-    # Known WD Tagger models (from ui/dialogs.py)
-    WD_MODELS = [
-        'SmilingWolf/wd-v1-4-moat-tagger-v2',
-        'SmilingWolf/wd-v1-4-vit-tagger-v2',
-        'SmilingWolf/wd-v1-4-vit-tagger',
-        'SmilingWolf/wd-v1-4-convnext-tagger-v2',
-        'SmilingWolf/wd-v1-4-convnext-tagger',
-        'SmilingWolf/wd-v1-4-convnextv2-tagger-v2',
-        'SmilingWolf/wd-v1-4-swinv2-tagger-v2',
-        'SmilingWolf/wd-vit-tagger-v3',
-        'SmilingWolf/wd-vit-large-tagger-v3',
-        'SmilingWolf/wd-convnext-tagger-v3',
-        'SmilingWolf/wd-swinv2-tagger-v3',
-        'SmilingWolf/wd-eva02-large-tagger-v3',
-    ]
+    WD_MODELS = WD_MODELS
+    CAMIE_MODELS = CAMIE_MODELS
 
-    # Known Camie models (from interrogators/camie_interrogator.py)
-    CAMIE_MODELS = [
-        'Camais03/camie-tagger',
-        'Camais03/camie-tagger-v2',
-    ]
-
-    def __init__(self):
-        """Initialize the model cache manager."""
-        self._ensure_cache_dirs()
-
-    def _ensure_cache_dirs(self):
-        """Ensure cache directories exist."""
-        TRT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    def __init__(self, tensorrt_cache_dir: Optional[Path] = None):
+        self.tensorrt_cache_dir = tensorrt_cache_dir if tensorrt_cache_dir is not None else TRT_CACHE_DIR
 
     def _hf_repo_to_cache_dir(self, repo_id: str) -> Path:
         """Convert HuggingFace repo ID to cache directory path.
@@ -95,6 +94,11 @@ class ModelCacheManager:
         """
         return model_id.replace('/', '_')
 
+    def _legacy_engine_entries(self, trt_name: str):
+        for path in self.tensorrt_cache_dir.glob(f"{trt_name}*"):
+            if path.name == trt_name or path.name[len(trt_name):].startswith(("_", ".")):
+                yield path
+
     def is_hf_model_cached(self, repo_id: str) -> Tuple[bool, Optional[Path], int]:
         """Check if a HuggingFace model is cached.
 
@@ -121,12 +125,18 @@ class ModelCacheManager:
         Returns:
             Tuple of (has_engine, engine_path, engine_size_bytes)
         """
+        model_path = self.get_onnx_model_path(model_id)
+        if model_path is not None:
+            directory = precompiled_engine_dir(self.tensorrt_cache_dir, model_path)
+            if directory is not None and has_tensorrt_engine(directory):
+                return True, directory, self._get_directory_size(directory)
+
         trt_name = self._model_id_to_trt_name(model_id)
 
         # Look for engine files matching the model name
         # TensorRT engines are typically named like: model_name_fp16.engine
-        if TRT_CACHE_DIR.exists():
-            for engine_file in TRT_CACHE_DIR.glob(f"{trt_name}*"):
+        if self.tensorrt_cache_dir.exists():
+            for engine_file in self._legacy_engine_entries(trt_name):
                 if engine_file.is_file():
                     size = engine_file.stat().st_size
                     return True, engine_file, size
@@ -209,9 +219,16 @@ class ModelCacheManager:
         """
         trt_name = self._model_id_to_trt_name(model_id)
         deleted = False
+        compiled = self.tensorrt_cache_dir / "compiled" / self._hf_repo_to_cache_dir(model_id).name
+        if compiled.is_dir():
+            try:
+                shutil.rmtree(compiled)
+                deleted = True
+            except OSError as exc:
+                print(f"Error deleting TensorRT engines for {model_id}: {exc}")
 
-        if TRT_CACHE_DIR.exists():
-            for engine_file in TRT_CACHE_DIR.glob(f"{trt_name}*"):
+        if self.tensorrt_cache_dir.exists():
+            for engine_file in self._legacy_engine_entries(trt_name):
                 try:
                     if engine_file.is_file():
                         engine_file.unlink()
@@ -252,20 +269,22 @@ class ModelCacheManager:
         Returns:
             Path to the .onnx file if found, None otherwise
         """
+        from interrogators.camie_interrogator import CamieInterrogator
+
+        filename = CamieInterrogator.MODELS.get(model_id, {}).get("model_file", "model.onnx")
         cache_dir = self._hf_repo_to_cache_dir(model_id)
-
-        if not cache_dir.exists():
-            return None
-
-        # Look in snapshots for .onnx files
-        snapshots_dir = cache_dir / "snapshots"
-        if snapshots_dir.exists():
-            for snapshot in snapshots_dir.iterdir():
-                if snapshot.is_dir():
-                    for onnx_file in snapshot.glob("*.onnx"):
-                        return onnx_file
-
-        return None
+        snapshots = cache_dir / "snapshots"
+        try:
+            revision = (cache_dir / "refs" / "main").read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            # Older or manually seeded caches can have snapshots without refs.
+            revision = ""
+        if revision:
+            if Path(revision).name != revision or revision in (".", ".."):
+                return None
+            candidate = snapshots / revision / filename
+            return candidate if candidate.is_file() else None
+        return next((candidate for candidate in sorted(snapshots.glob(f"*/{filename}")) if candidate.is_file()), None)
 
     @staticmethod
     def format_size(size_bytes: int) -> str:
