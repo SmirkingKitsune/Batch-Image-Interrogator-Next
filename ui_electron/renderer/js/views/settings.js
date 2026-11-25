@@ -382,7 +382,7 @@ function ApplicationPage() {
     </div>
     <div class="card col gap8">
       <div class="label">About</div>
-      <div class="help">Image Interrogator — batch image tagging with CLIP, WD and Camie taggers and llama.cpp multimodal inquiry. This window is the opt-in Electron front end, started by <span class="mono">./run.sh --electron</span>. Without the flag the PyQt6 interface opens as before; both share the same database and settings.</div>
+      <div class="help">Image Interrogator — batch image tagging with CLIP, WD and Camie taggers and llama.cpp multimodal inquiry. Electron is the default viewer. The deprecated Qt viewer shares its database and model settings.</div>
     </div>
   </div>`;
 }

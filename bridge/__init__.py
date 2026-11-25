@@ -1,4 +1,4 @@
-"""Headless backend for the opt-in Electron front end (./run.sh --electron).
+"""Headless backend for the Electron front end.
 
 Runs the existing core/ and interrogators/ without Qt, serves them to the
 Electron window over a token-protected socket on 127.0.0.1, and exits when

@@ -29,10 +29,10 @@ def test_imports():
         return False
     
     try:
-        from ui import MainWindow
-        print("  ✓ UI components")
+        from bridge import start_bridge
+        print("  ✓ Electron bridge")
     except ImportError as e:
-        print(f"  ✗ UI components: {e}")
+        print(f"  ✗ Electron bridge: {e}")
         return False
     
     return True
@@ -43,7 +43,6 @@ def test_dependencies():
     print("\nTesting dependencies...")
     
     packages = [
-        ('PyQt6', 'PyQt6.QtWidgets'),
         ('Pillow', 'PIL'),
         ('NumPy', 'numpy'),
         ('ONNX Runtime', 'onnxruntime'),
@@ -132,6 +131,25 @@ def test_gpu_availability():
         print("  ○ ONNX Runtime not installed")
 
 
+def check_viewer(use_qt):
+    print("\nChecking viewer...")
+    if use_qt:
+        try:
+            from ui import MainWindow
+        except ImportError as exc:
+            print(f"  ✗ Qt viewer: {exc}")
+            return False
+        print("  ✓ Deprecated Qt viewer")
+        return True
+
+    from bridge.electron import NOT_INSTALLED_MESSAGE, electron_binary
+    if electron_binary() is None:
+        print(NOT_INSTALLED_MESSAGE)
+        return False
+    print("  ✓ Electron viewer")
+    return True
+
+
 def main():
     """Run all tests."""
     print("=" * 60)
@@ -144,6 +162,8 @@ def main():
     results.append(("Module Imports", test_imports()))
     results.append(("Dependencies", test_dependencies()))
     results.append(("Database", test_database()))
+    use_qt = "--qt" in sys.argv[1:]
+    results.append(("Viewer", check_viewer(use_qt)))
     
     # GPU check (informational)
     test_gpu_availability()
@@ -162,10 +182,10 @@ def main():
     print("\n" + "=" * 60)
     if all_passed:
         print("All tests passed! Installation is complete.")
-        print("\nYou can now run: python main.py")
+        launch_args = " --qt" if use_qt else ""
+        print(f"\nYou can now run: python main.py{launch_args}")
     else:
-        print("Some tests failed. Please install missing dependencies:")
-        print("  pip install -r requirements.txt")
+        print("Some tests failed. Check the messages above and rerun setup.")
     print("=" * 60)
     
     return 0 if all_passed else 1

@@ -9,12 +9,16 @@ import os
 import sys
 import tempfile
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+if find_spec("PyQt6") is None:
+    raise unittest.SkipTest("The deprecated Qt viewer is not installed.")
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 

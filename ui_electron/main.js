@@ -1,8 +1,8 @@
 'use strict';
 
-// Electron main process for Image Interrogator's opt-in front end.
+// Electron main process for Image Interrogator's front end.
 //
-// It is started by the Python bridge (./run.sh --electron), which passes the
+// It is started by the Python bridge (./run.sh), which passes the
 // bridge URL and a per-launch token through the environment. The token goes
 // into the session as an HttpOnly cookie before the page loads, so page
 // script never sees it. The window loads the renderer from the bridge and
@@ -17,7 +17,7 @@ const BRIDGE_TOKEN = process.env.II_BRIDGE_TOKEN || '';
 const PROJECT_ROOT = process.env.II_PROJECT_ROOT || path.resolve(__dirname, '..');
 
 if (!BRIDGE_URL || !BRIDGE_TOKEN) {
-  console.error('This window is started by ./run.sh --electron. Run that instead of launching Electron directly.');
+  console.error('This window is started by ./run.sh. Run that instead of launching Electron directly.');
   app.exit(1);
 }
 

@@ -1,11 +1,15 @@
 import os
 import tempfile
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
+if find_spec("PyQt6") is None:
+    raise unittest.SkipTest("The deprecated Qt viewer is not installed.")
+
 from PyQt6.QtWidgets import QApplication
 
 from core.database import InterrogationDatabase

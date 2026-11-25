@@ -2,7 +2,7 @@
 """
 Image Interrogator - Batch Image Tagging Tool
 
-A PyQt6-based application for batch image interrogation and tagging using
+An Electron application for batch image interrogation and tagging using
 CLIP and Waifu Diffusion models with SQLite caching.
 """
 
@@ -39,15 +39,19 @@ def main():
 
     print()  # Blank line for readability
 
-    # Opt-in Electron front end: the same backend, run headless behind a local
-    # bridge. Qt is never imported on this path.
-    if "--electron" in sys.argv[1:]:
+    args = sys.argv[1:]
+    if "--qt" not in args:
         from bridge import start_bridge
-        sys.exit(start_bridge(device_status, sys.argv[1:]))
+        sys.exit(start_bridge(device_status, args))
 
-    # NOW safe to import and initialize Qt (PyTorch already claimed CUDA)
-    from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtCore import Qt, QTimer
+    print("[WARN] The Qt viewer is deprecated. Electron is the default.", file=sys.stderr)
+    # PyTorch has already claimed CUDA by the time the legacy UI imports Qt.
+    try:
+        from PyQt6.QtCore import Qt, QTimer
+        from PyQt6.QtWidgets import QApplication
+    except ImportError:
+        print("[X] Qt is not installed. Run setup.bat --qt or ./setup.sh --qt.", file=sys.stderr)
+        sys.exit(1)
     from ui import MainWindow
 
     # Enable high DPI scaling
@@ -56,7 +60,7 @@ def main():
     )
 
     # Create application
-    app = QApplication(sys.argv)
+    app = QApplication([sys.argv[0], *(arg for arg in args if arg != "--qt")])
     app.setApplicationName("Image Interrogator")
     app.setOrganizationName("ImageInterrogator")
 

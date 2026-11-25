@@ -1,4 +1,4 @@
-"""Tests for the headless bridge behind the opt-in Electron front end."""
+"""Tests for the headless bridge behind the Electron front end."""
 
 import http.client
 import io
@@ -662,16 +662,17 @@ class LaunchTests(unittest.TestCase):
 
         with patch.object(bridge_app, "electron_binary", return_value=None), \
                 patch("sys.stderr") as stderr:
-            code = bridge_app.start_bridge({}, ["--electron"])
+            code = bridge_app.start_bridge({}, [])
         self.assertEqual(code, 1)
         written = "".join(call.args[0] for call in stderr.write.call_args_list)
-        self.assertIn("--electron requested but Electron is not installed", written)
-        self.assertIn("./setup.sh --electron", written)
+        self.assertIn("Electron is not installed", written)
+        self.assertIn("./setup.sh", written)
+        self.assertIn("setup.bat", written)
 
-    def test_electron_flag_hands_over_to_the_bridge_without_qt(self):
+    def test_electron_launches_without_importing_qt(self):
         script = (
             "import sys\n"
-            "sys.argv = ['main.py', '--electron']\n"
+            "sys.argv = ['main.py', *sys.argv[1:]]\n"
             "import core.device_detector as dd\n"
             "dd.detect_devices_early = lambda: {'pytorch_cuda_available': False, 'pytorch_error': None,"
             " 'onnx_cuda_available': False, 'onnx_error': None}\n"
@@ -687,13 +688,35 @@ class LaunchTests(unittest.TestCase):
             "except SystemExit as exc:\n"
             "    code = exc.code\n"
             "assert code == 7, code\n"
-            "assert seen['argv'] == ['--electron'], seen\n"
+            "assert seen['argv'] == sys.argv[1:], seen\n"
             "assert not any(m.startswith('PyQt6') for m in sys.modules), 'Qt was imported'\n"
         )
-        result = subprocess.run(
-            [sys.executable, "-c", script], cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=120,
+        for args in ([], ["--electron"], ["--bridge-only", "--bridge-port", "51734"]):
+            with self.subTest(args=args):
+                result = subprocess.run(
+                    [sys.executable, "-c", script, *args],
+                    cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=120,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_qt_flag_reports_missing_optional_dependency(self):
+        script = (
+            "import sys\n"
+            "sys.argv = ['main.py', '--qt']\n"
+            "sys.modules['PyQt6'] = None\n"
+            "import core.device_detector as dd\n"
+            "dd.detect_devices_early = lambda: {'pytorch_cuda_available': False, 'pytorch_error': None,"
+            " 'onnx_cuda_available': False, 'onnx_error': None}\n"
+            "import main\n"
+            "main.main()\n"
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("The Qt viewer is deprecated", result.stderr)
+        self.assertIn("./setup.sh --qt", result.stderr)
 
     def test_token_travels_by_environment_not_argv(self):
         from bridge import electron

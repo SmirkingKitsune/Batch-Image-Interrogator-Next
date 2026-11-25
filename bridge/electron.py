@@ -1,6 +1,6 @@
 """Finding and launching the Electron front end.
 
-`./setup.sh --electron` installs Electron into ui_electron/node_modules. The
+`./setup.sh` installs Electron into ui_electron/node_modules. The
 npm package records its binary's location in path.txt, so no Node.js is needed
 at launch time: the bridge runs that binary directly.
 """
@@ -18,9 +18,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ELECTRON_APP_DIR = PROJECT_ROOT / "ui_electron"
 ELECTRON_PACKAGE_DIR = ELECTRON_APP_DIR / "node_modules" / "electron"
 NOT_INSTALLED_MESSAGE = (
-    "[X] --electron requested but Electron is not installed.\n"
-    "    Run ./setup.sh --electron once, or drop the flag\n"
-    "    to use the default PyQt6 interface."
+    "[X] Electron is not installed.\n"
+    "    Run setup.bat on Windows or ./setup.sh on Linux/macOS.\n"
+    "    If you installed the deprecated Qt viewer, launch it with --qt."
 )
 
 
@@ -33,7 +33,7 @@ def electron_binary(package_dir: Path = ELECTRON_PACKAGE_DIR) -> Optional[Path]:
     if not relative:
         return None
     binary = package_dir / "dist" / relative
-    return binary if binary.is_file() else None
+    return binary if binary.is_file() and os.access(binary, os.X_OK) else None
 
 
 def electron_version(package_dir: Path = ELECTRON_PACKAGE_DIR) -> str:

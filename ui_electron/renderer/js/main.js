@@ -54,7 +54,7 @@ function App() {
     <${Toasts} />
     ${loaded && !connected ? html`<div class="disconnected"><div class="box">
       <div class="t">Backend disconnected</div>
-      <div class="help">The Python bridge stopped responding. The window reconnects by itself if it comes back; otherwise close it and run ./run.sh --electron again.</div>
+      <div class="help">The Python bridge stopped responding. The window reconnects by itself if it comes back; otherwise close it and run ./run.sh again.</div>
     </div></div>` : null}
   </div>`;
 }

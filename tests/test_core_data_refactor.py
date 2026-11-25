@@ -18,7 +18,6 @@ from core.db_queue import (
 )
 from core.file_manager import FileManager
 import core.hashing as hashing
-from ui.workers import OrganizationWorker
 
 
 def _queue_params():
@@ -255,6 +254,9 @@ class TestFileOrganization:
         assert (target / "image.txt").read_text(encoding="utf-8") == "existing"
 
     def test_worker_emits_actual_collision_adjusted_destination(self, tmp_path):
+        pytest.importorskip("PyQt6")
+        from ui.workers import OrganizationWorker
+
         image = self._image_with_tags(tmp_path)
         target = tmp_path / "organized"
         target.mkdir()

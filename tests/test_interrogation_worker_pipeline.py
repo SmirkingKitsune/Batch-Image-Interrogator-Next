@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -20,7 +21,14 @@ from core.pipelines import InterrogationBatchRunner
 from interrogators.camie_interrogator import CamieInterrogator
 from interrogators.clip_interrogator import CLIPInterrogator
 from interrogators.wd_interrogator import WDInterrogator
-from ui.workers import InterrogationWorker
+
+
+def _qt_worker(*args, **kwargs):
+    if find_spec("PyQt6") is None:
+        raise unittest.SkipTest("The deprecated Qt viewer is not installed.")
+    from ui.workers import InterrogationWorker
+
+    return InterrogationWorker(*args, **kwargs)
 
 
 class FixedScoreSession:
@@ -157,7 +165,7 @@ class InterrogationWorkerPipelineTests(unittest.TestCase):
             db.save_interrogation(image_id, model_id, [], {}, "")
 
             interrogator = make_wd(0.35, {"fresh_tag": 0.9})
-            worker = InterrogationWorker([image_path], interrogator, db, write_files=False)
+            worker = _qt_worker([image_path], interrogator, db, write_files=False)
             worker.run()
 
             self.assertEqual(interrogator.model.calls, 1)
@@ -177,7 +185,7 @@ class InterrogationWorkerPipelineTests(unittest.TestCase):
             db.save_interrogation(image_id, model_id, ["stale_tag"], {"stale_tag": 0.4}, "stale_tag")
 
             interrogator = make_wd(0.35, {"fresh_tag": 0.9})
-            worker = InterrogationWorker([image_path], interrogator, db, write_files=False)
+            worker = _qt_worker([image_path], interrogator, db, write_files=False)
             worker.run()
 
             self.assertEqual(interrogator.model.calls, 1)
@@ -370,10 +378,10 @@ class InterrogationWorkerPipelineTests(unittest.TestCase):
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
 
             interrogator = FakeTagger("FakeWD", "WD", ["fresh_tag"])
-            InterrogationWorker([image_path], interrogator, db, write_files=False).run()
+            _qt_worker([image_path], interrogator, db, write_files=False).run()
 
             cached_flags = []
-            worker = InterrogationWorker([image_path], interrogator, db, write_files=False)
+            worker = _qt_worker([image_path], interrogator, db, write_files=False)
             worker._runner.on_result = lambda _path, _results, meta: cached_flags.append(meta["cached"])
             worker.run()
 
@@ -390,7 +398,7 @@ class InterrogationWorkerPipelineTests(unittest.TestCase):
 
             db = InterrogationDatabase(str(tmp / "interrogations.db"))
             interrogator = FakeTagger("FakeCamie", "Camie", ["new_tag"])
-            worker = InterrogationWorker(
+            worker = _qt_worker(
                 [image_path],
                 interrogator,
                 db,

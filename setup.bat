@@ -15,11 +15,10 @@ setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
 
-REM --electron additionally installs the opt-in Electron front end, started
-REM with run.bat --electron. The PyQt6 interface needs none of it.
-set "INSTALL_ELECTRON=n"
+REM --qt installs the deprecated Qt viewer instead of Electron.
+set "INSTALL_QT=n"
 for %%a in (%*) do (
-    if /i "%%~a"=="--electron" set "INSTALL_ELECTRON=y"
+    if "%%~a"=="--qt" set "INSTALL_QT=y"
 )
 echo.
 echo ============================================================
@@ -311,7 +310,15 @@ if errorlevel 1 (
 )
 
 echo.
-echo       All dependencies installed successfully!
+if "!INSTALL_QT!"=="y" (
+    pip install -r requirements-qt.txt --upgrade
+    if errorlevel 1 (
+        echo [ERROR] Failed to install the Qt viewer.
+        pause
+        exit /b 1
+    )
+)
+echo       All Python dependencies installed successfully!
 echo.
 
 REM Verify installation
@@ -326,7 +333,13 @@ echo ONNX Runtime:
 python -c "import onnxruntime as ort; print(f'  Version: {ort.__version__}'); providers = ort.get_available_providers(); print(f'  CUDA Provider: {\"Yes\" if \"CUDAExecutionProvider\" in providers else \"No\"}')"
 echo.
 echo Critical Dependencies:
-python -c "import PyQt6; print('  PyQt6: Installed')" 2>nul || echo   [ERROR] PyQt6: NOT INSTALLED
+if "!INSTALL_QT!"=="y" (
+    python -c "from PyQt6 import QtWidgets; print('  PyQt6: Installed')"
+    if errorlevel 1 (
+        pause
+        exit /b 1
+    )
+)
 python -c "from clip_interrogator import Interrogator; print('  CLIP Interrogator: Installed')" 2>nul || echo   [ERROR] CLIP Interrogator: NOT INSTALLED
 python -c "import PIL; print('  Pillow: Installed')" 2>nul || echo   [ERROR] Pillow: NOT INSTALLED
 echo.
@@ -354,13 +367,11 @@ if "!INSTALL_CUDA!"=="y" (
     )
 )
 
-set "ELECTRON_STATUS="
-if /i "!INSTALL_ELECTRON!"=="y" (
+if "!INSTALL_QT!"=="n" (
     call :install_electron
     if errorlevel 1 (
-        set "ELECTRON_STATUS=failed"
-    ) else (
-        set "ELECTRON_STATUS=ok"
+        pause
+        exit /b 1
     )
 )
 
@@ -368,17 +379,19 @@ echo ============================================================
 echo SETUP COMPLETE!
 echo ============================================================
 echo.
-echo You can now run the application with: run.bat
-if "!ELECTRON_STATUS!"=="ok" echo Electron UI, opt-in:                  run.bat --electron
-if "!ELECTRON_STATUS!"=="failed" echo The Electron UI was not installed; see the messages above.
+if "!INSTALL_QT!"=="y" (
+    echo Launch the deprecated Qt viewer with: run.bat --qt
+) else (
+    echo You can now run the application with: run.bat
+)
 echo.
 pause
 endlocal
-exit /b
+exit /b 0
 
 :install_electron
 echo ============================================================
-echo ELECTRON UI (--electron)
+echo ELECTRON UI
 echo ============================================================
 echo.
 where node >nul 2>&1
@@ -409,8 +422,14 @@ if errorlevel 1 (
     exit /b 1
 )
 popd
-if not exist "ui_electron\node_modules\electron\path.txt" (
+set "ELECTRON_REL="
+if exist "ui_electron\node_modules\electron\path.txt" set /p ELECTRON_REL=<"ui_electron\node_modules\electron\path.txt"
+if not defined ELECTRON_REL (
     echo [X] Electron did not install correctly.
+    exit /b 1
+)
+if not exist "ui_electron\node_modules\electron\dist\!ELECTRON_REL!" (
+    echo [X] Electron executable was not found.
     exit /b 1
 )
 echo [+] Electron installed at ui_electron\node_modules
@@ -420,5 +439,5 @@ exit /b 0
 :electron_no_node
 echo [X] Node.js and npm are needed once to install the Electron UI.
 echo     Install Node.js 22.12 or newer from https://nodejs.org, then run
-echo     setup.bat --electron again. The default PyQt6 interface is unaffected.
+echo     setup.bat again.
 exit /b 1

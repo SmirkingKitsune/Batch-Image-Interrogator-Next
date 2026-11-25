@@ -23,25 +23,23 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# --electron additionally installs the opt-in Electron front end, which is
-# started with ./run.sh --electron. The PyQt6 interface needs none of it.
-INSTALL_ELECTRON=n
+# --qt installs the deprecated Qt viewer instead of Electron.
+INSTALL_QT=n
 for arg in "$@"; do
-    case "$arg" in
-        --electron) INSTALL_ELECTRON=y ;;
-    esac
+    if [ "$arg" = "--qt" ]; then
+        INSTALL_QT=y
+    fi
 done
 
 install_electron_ui() {
     echo "============================================================"
-    echo "ELECTRON UI (--electron)"
+    echo "ELECTRON UI"
     echo "============================================================"
     echo ""
     if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
         echo -e "${RED}[X] Node.js and npm are needed once to install the Electron UI.${NC}"
         echo "    Install Node.js 22.12 or newer (https://nodejs.org or your package"
-        echo "    manager), then run ./setup.sh --electron again."
-        echo "    The default PyQt6 interface is unaffected."
+        echo "    manager), then run ./setup.sh again."
         return 1
     fi
     local node_version
@@ -498,7 +496,10 @@ if [ $? -ne 0 ]; then
 fi
 
 echo ""
-echo -e "${GREEN}      All dependencies installed successfully!${NC}"
+if [ "$INSTALL_QT" = "y" ]; then
+    pip install -r requirements-qt.txt --upgrade
+fi
+echo -e "${GREEN}      All Python dependencies installed successfully!${NC}"
 echo ""
 
 # Verify installation
@@ -529,7 +530,9 @@ print(f'  TensorRT Provider: {"Yes" if "TensorrtExecutionProvider" in providers 
 EOF
 echo ""
 echo "Critical Dependencies:"
-python3 -c "import PyQt6; print('  PyQt6: Installed')" 2>/dev/null || echo -e "${RED}  [ERROR] PyQt6: NOT INSTALLED${NC}"
+if [ "$INSTALL_QT" = "y" ]; then
+    python3 -c "from PyQt6 import QtWidgets; print('  PyQt6: Installed')"
+fi
 python3 -c "from clip_interrogator import Interrogator; print('  CLIP Interrogator: Installed')" 2>/dev/null || echo -e "${RED}  [ERROR] CLIP Interrogator: NOT INSTALLED${NC}"
 python3 -c "import PIL; print('  Pillow: Installed')" 2>/dev/null || echo -e "${RED}  [ERROR] Pillow: NOT INSTALLED${NC}"
 echo ""
@@ -600,25 +603,17 @@ elif [ "$INSTALL_CUDA" = "y" ]; then
     fi
 fi
 
-ELECTRON_STATUS=""
-if [ "$INSTALL_ELECTRON" = "y" ]; then
-    if install_electron_ui; then
-        ELECTRON_STATUS=ok
-    else
-        ELECTRON_STATUS=failed
-    fi
+if [ "$INSTALL_QT" = "n" ]; then
+    install_electron_ui
 fi
 
 echo "============================================================"
 echo "SETUP COMPLETE!"
 echo "============================================================"
 echo ""
-echo "You can now run the application with: ./run.sh"
-if [ "$ELECTRON_STATUS" = "ok" ]; then
-    echo "Electron UI (opt-in):                 ./run.sh --electron"
-elif [ "$ELECTRON_STATUS" = "failed" ]; then
-    echo -e "${YELLOW}The Electron UI was not installed; see the messages above.${NC}"
-    echo ""
-    exit 1
+if [ "$INSTALL_QT" = "y" ]; then
+    echo "Launch the deprecated Qt viewer with: ./run.sh --qt"
+else
+    echo "You can now run the application with: ./run.sh"
 fi
 echo ""

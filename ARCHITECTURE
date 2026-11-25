@@ -2,7 +2,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        User Interface Layer (PyQt6)                 │
+│                        Deprecated Qt User Interface                 │
 │  ┌───────────────────────────────────────────────────────────────┐  │
 │  │                     main_window.py                            │  │
 │  │  ┌─────────────────┐  ┌───────────┐  ┌─────────────────────┐  │  │
@@ -162,12 +162,12 @@ Note: SQLite database handles concurrent access safely.
 
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│              Opt-in Electron Front End (./run.sh --electron)         │
+│              Default Electron Front End (./run.sh)                  │
 └─────────────────────────────────────────────────────────────────────┘
 
-main.py ── detect_devices_early() ──┬── no flag ──► QApplication + MainWindow (PyQt6)
+main.py ── detect_devices_early() ──┬── --qt ──► QApplication + MainWindow (PyQt6)
                                     │
-                                    └── --electron ──► bridge.start_bridge()
+                                    └── default ─────► bridge.start_bridge()
                                                           │
    ui_electron/ (Electron)                                ▼
    ┌──────────────────────────┐     127.0.0.1:<port>   ┌──────────────────────────┐

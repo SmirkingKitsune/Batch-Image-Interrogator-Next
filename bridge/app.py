@@ -1,7 +1,6 @@
-"""Entry point for the opt-in Electron front end.
+"""Entry point for the default Electron front end.
 
-main.py detects devices first, exactly as for PyQt6, then hands over here
-when `--electron` is passed. Qt is never imported on this path.
+The launcher detects compute devices before starting this Qt-free bridge.
 """
 
 from __future__ import annotations

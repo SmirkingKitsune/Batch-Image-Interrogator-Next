@@ -3,14 +3,13 @@
 import os
 import sys
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from core.context_sizing import (  # noqa: E402
     kv_bytes_per_token,
@@ -138,6 +137,10 @@ class MetadataReportingTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if find_spec("PyQt6") is None:
+            raise unittest.SkipTest("The deprecated Qt viewer is not installed.")
+        from PyQt6.QtWidgets import QApplication
+
         cls.app = QApplication.instance() or QApplication([])
 
     def _widget(self, ctx_size=131072, max_tokens=2048):

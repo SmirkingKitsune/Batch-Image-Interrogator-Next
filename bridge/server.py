@@ -203,7 +203,7 @@ def _make_handler(bridge: BridgeServer):
             if not self._authorized():
                 return self._send_text(
                     HTTPStatus.UNAUTHORIZED,
-                    "This window is served by ./run.sh --electron. Open it from there.",
+                    "This window is served by ./run.sh. Open it from there.",
                 )
             if path == "/":
                 return self._redirect("/app/")

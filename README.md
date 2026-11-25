@@ -1,6 +1,6 @@
 # Image Interrogator - Batch Image Tagging Tool
 
-A professional PyQt6-based application for batch image interrogation and tagging using CLIP and Waifu Diffusion models with SQLite caching for efficiency.
+An Electron application for batch image interrogation and tagging using CLIP and Waifu Diffusion models with SQLite caching for efficiency.
 
 ## Features
 
@@ -31,7 +31,9 @@ image_interrogator/
 ├── interrogators/            # Model implementations
 │   ├── clip_interrogator.py # CLIP model
 │   └── wd_interrogator.py   # Waifu Diffusion Tagger
-├── ui/                       # PyQt6 UI components
+├── bridge/                   # Local Python backend for Electron
+├── ui_electron/              # Electron viewer
+├── ui/                       # Deprecated Qt viewer
 │   ├── main_window.py       # Main application window
 │   ├── widgets.py           # Custom widgets
 │   ├── dialogs.py           # Configuration dialogs
@@ -45,6 +47,7 @@ image_interrogator/
 ### Prerequisites
 
 - Python 3.10+
+- Node.js 22.12 or newer with npm for Electron setup
 
 **Optional:**
 
@@ -74,7 +77,7 @@ The setup script will:
 2. Create a virtual environment
 3. Detect your NVIDIA/AMD GPU toolkit versions automatically (CUDA/ROCm)
 4. Install PyTorch with the correct CUDA support for your system
-5. Install all other dependencies
+5. Install Python dependencies and the Electron viewer
 6. Provision `llama-server` from official GitHub releases (if missing), selecting the best GPU build for your toolkit
 7. Verify the installation
 
@@ -140,6 +143,14 @@ pip install onnxruntime>=1.16.0
 **Step 4: Install Other Dependencies**
 ```bash
 pip install -r requirements.txt
+```
+
+**Step 5: Install the Electron viewer**
+```bash
+cd ui_electron
+npm ci --no-audit --no-fund
+node node_modules/electron/install.js
+cd ..
 ```
 
 **Important Notes**:
@@ -208,23 +219,15 @@ If the script detects you have an NVIDIA GPU but PyTorch is running in CPU mode,
 python main.py
 ```
 
-### Electron UI (opt-in)
+### Electron viewer
 
-An alternative front end built with Electron is available behind a flag. PyQt6 stays the default and is unchanged; the Electron window only opens when `--electron` is passed. Both interfaces share the same database, tag filters, ONNX provider settings and Inquiry settings.
+Electron opens by default from the run scripts or `python main.py`. The old
+`--electron` flag still works in scripts. Electron and the deprecated Qt viewer
+share the same database, tag filters, ONNX provider settings and Inquiry settings.
 
-Install it once (needs Node.js 22.12 or newer at install time only):
-```bash
-./setup.sh --electron      # Windows: setup.bat --electron
-```
-
-Then launch it:
-```bash
-./run.sh --electron        # Windows: run.bat --electron
-```
-
-If Electron is not installed, `--electron` stops with a message instead of silently opening PyQt6.
-
-How it works: `main.py` detects devices first, as always, then starts a headless bridge that runs `core/` and `interrogators/` without importing Qt. The bridge serves the window on `127.0.0.1` with a per-launch token passed to Electron through the environment, streams progress, results and transcript tokens to it, and shuts down when the window closes.
+The launcher detects compute devices first, then starts a Qt-free Python bridge.
+The bridge serves the window on `127.0.0.1` with a per-launch token, streams
+progress and results, and stops when the window closes.
 
 What the Electron UI adds:
 - A run bar with per-image states (queued, running, cached, done, failed), throughput, ETA, pause and cancel
@@ -240,7 +243,18 @@ sudo chown root:root ui_electron/node_modules/electron/dist/chrome-sandbox
 sudo chmod 4755 ui_electron/node_modules/electron/dist/chrome-sandbox
 ```
 
-For development, `python main.py --electron --bridge-only --bridge-port 51734` serves the UI without launching Electron and prints a one-time URL to open it in a browser.
+For development, `python main.py --bridge-only --bridge-port 51734` serves the UI without launching Electron and prints a one-time URL to open it in a browser.
+
+### Deprecated Qt viewer
+
+Qt remains available for existing workflows that rely on loading a saved
+multimodal model directly from Advanced Image Inspection. In Electron, load the
+model from the Inquiry tab before using it in Advanced Image Inspection.
+
+- **Windows** — Install with `setup.bat --qt`, then launch with `run.bat --qt`.
+- **Linux/macOS** — Install with `./setup.sh --qt`, then launch with `./run.sh --qt`.
+- **Existing Python environment** — Install with `python -m pip install -r requirements-qt.txt`,
+  then launch with `python main.py --qt`.
 
 ### Basic Workflow
 
@@ -1011,7 +1025,7 @@ FileManager.write_tags_to_file(Path("path/to/image.jpg"), results['tags'])
 - **CLIP Interrogator**: Uses the clip-interrogator library
 - **Waifu Diffusion Tagger**: Uses SmilingWolf's WD Tagger models
 - **Camie Tagger**: Uses Camais03's Camie Tagger models
-- **UI Framework**: PyQt6
+- **UI Framework**: Electron (PyQt6 for the deprecated viewer)
 
 ## Support
 

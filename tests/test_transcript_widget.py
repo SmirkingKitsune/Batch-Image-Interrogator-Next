@@ -2,8 +2,12 @@
 
 import os
 import unittest
+from importlib.util import find_spec
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+if find_spec("PyQt6") is None:
+    raise unittest.SkipTest("The deprecated Qt viewer is not installed.")
 
 from PyQt6.QtWidgets import QApplication, QLabel
 

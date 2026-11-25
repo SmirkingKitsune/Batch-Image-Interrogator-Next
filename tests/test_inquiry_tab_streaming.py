@@ -4,6 +4,7 @@ import os
 import tempfile
 import time
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
@@ -11,6 +12,9 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
+if find_spec("PyQt6") is None:
+    raise unittest.SkipTest("The deprecated Qt viewer is not installed.")
+
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from core import InterrogationDatabase, TagFilterSettings
